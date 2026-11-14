@@ -195,7 +195,7 @@ window.__ModuleLoader__.load({
       .dwa-sb-box[data-selected='1'] .dwa-sb-n { background: #2f6fed; }
       .dwa-sb-ghost { position: absolute; border: 1px dashed #e5484d; background: rgba(229,72,77,.1); }
 
-      .dwa-sheet { position: fixed; z-index: 1401; width: min(320px, calc(100vw - 24px)); display: flex; flex-direction: column; gap: 6px;
+      .dwa-sheet { position: fixed; z-index: 1401; width: min(320px, calc(100vw - 24px)); max-height: calc(100vh - 20px); overflow-y: auto; display: flex; flex-direction: column; gap: 6px;
         padding: 8px 10px 10px; border-radius: var(--dsw-radius-lg, 10px);
         background: var(--dsw-specific-menu, rgba(255,255,255,.96));
         border: 1px solid var(--dsw-alias-border-l1, rgba(0,0,0,.1)); box-shadow: 0 10px 30px rgba(0,0,0,.28); }
@@ -1055,15 +1055,44 @@ window.__ModuleLoader__.load({
           el('b', null, locator(t, selectedBox, { kind: shot.mode === 'frozen' ? 'browser' : 'document' }) || t('sbAnchorFile')))
         : null
 
-      // Where the editor can live: beside the pane when the layout leaves room,
-      // otherwise docked inside its bottom-right corner.
-      const room = Math.round(shot.left) - 20
-      const beside = room >= 240
-      const sheetWidth = Math.min(320, Math.max(220, room - 12))
+      const live = shot.mode === 'live'
+      // The anchor is the region in viewport pixels: frozen boxes are already
+      // relative to the shot, live ones have to lose the current scroll.
+      const toViewport = (box) => ({
+        x: shot.left + (live ? box.x - scroll.x : box.x),
+        y: shot.top + (live ? box.y - scroll.y : box.y),
+      })
+      const focusBox = selectedBox || boxes[total - 1] || null
+      const sheetWidth = Math.min(300, Math.max(232, Math.round(shot.width * 0.3)))
+
+      // The editor hugs the region it belongs to: to its right when there is
+      // room, else to its left, else above/below — always inside the window.
+      function placeSheet(box) {
+        const point = toViewport(box)
+        const viewW = (typeof window !== 'undefined' && window.innerWidth) || 1280
+        const viewH = (typeof window !== 'undefined' && window.innerHeight) || 800
+        const gap = 12
+        const pad = 10
+        const height = 250
+        const clampX = (value) => Math.min(Math.max(pad, value), Math.max(pad, viewW - sheetWidth - pad))
+        const clampY = (value) => Math.min(Math.max(pad, value), Math.max(pad, viewH - height - pad))
+        if (point.x + box.w + gap + sheetWidth <= viewW - pad) {
+          return { left: point.x + box.w + gap, top: clampY(point.y) }
+        }
+        if (point.x - gap - sheetWidth >= pad) {
+          return { left: point.x - gap - sheetWidth, top: clampY(point.y) }
+        }
+        const below = point.y + box.h + gap
+        const above = point.y - gap - height
+        return {
+          left: clampX(point.x),
+          top: clampY(below + height <= viewH - pad ? below : above),
+        }
+      }
 
       // The note editor only appears once a region exists, and it never sits on
       // top of the picture while a new region is being dragged out.
-      const sheetParts = total === 0 || (dragging && !beside)
+      const sheetParts = total === 0 || dragging
         ? null
         : [
           el('div', { className: 'dwa-sheet-bar' },
@@ -1102,7 +1131,6 @@ window.__ModuleLoader__.load({
           error ? el('div', { className: 'dwa-error' }, error) : null,
         ]
 
-      const live = shot.mode === 'live'
       const frameStyle = {
         left: `${shot.left}px`,
         top: `${shot.top}px`,
@@ -1148,15 +1176,12 @@ window.__ModuleLoader__.load({
         ? el('div', { className: 'dwa-tip' }, t('sbTip'))
         : null
 
-      // Park the editor beside the pane when there is room (over the chat
-      // column), so it never covers the area still being boxed.
-      const sheetStyle = beside
-        ? { left: `${Math.round(shot.left) - sheetWidth - 12}px`, top: `${Math.round(shot.top) + 10}px`, width: `${sheetWidth}px` }
-        : {
-          left: `${Math.max(8, Math.round(shot.left + shot.width) - sheetWidth - 12)}px`,
-          top: `${Math.max(8, Math.round(shot.top + shot.height) - 190)}px`,
-          width: `${sheetWidth}px`,
-        }
+      const spot = focusBox ? placeSheet(focusBox) : { left: 10, top: 10 }
+      const sheetStyle = {
+        left: `${Math.round(spot.left)}px`,
+        top: `${Math.round(spot.top)}px`,
+        width: `${sheetWidth}px`,
+      }
 
       const surface = el('div', { className: 'dwa-freeze', 'data-mode': shot.mode, style: frameStyle }, stage, tip)
 

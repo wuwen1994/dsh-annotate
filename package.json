@@ -1,6 +1,6 @@
 {
   "name": "dsh-web-annotate",
-  "version": "0.7.3",
+  "version": "0.7.4",
   "private": true,
   "type": "module",
   "description": "Annotate regions on a web page or a file preview (PDF, Markdown, txt, code, image) in the DeepSeek Harness sidebar and send crops plus a located prompt to the composer.",

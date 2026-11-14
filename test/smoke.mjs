@@ -506,11 +506,42 @@ async function scenarioPage() {
   check('page: the editor appears only after the first region', () => {
     const sheet = find(scene.tree, (node) => node.props?.className === 'dwa-sheet')
     assert.ok(sheet, 'no editor once a region exists')
-    // It parks in the column left of the pane, never on top of it.
-    const left = Number.parseInt(sheet.props.style.left, 10)
-    assert.ok(left + Number.parseInt(sheet.props.style.width, 10) <= 260, `editor overlaps the pane: ${sheet.props.style.left}`)
-    assert.ok(left >= 0)
+    // It hugs the region: 12px to the right of it, level with its top.
+    const left = Number.parseFloat(sheet.props.style.left)
+    const top = Number.parseFloat(sheet.props.style.top)
+    const width = Number.parseFloat(sheet.props.style.width)
+    assert.ok(left >= 420 && left <= 460, `editor is not next to the region: ${left}`)
+    assert.ok(Math.abs(top - 160) <= 24, `editor is not level with the region: ${top}`)
+    assert.ok(left + width <= 1280, 'editor runs off the window')
     assert.ok(find(scene.tree, (node) => node.type === 'textarea'), 'no note box')
+  })
+
+  // A second region near the right edge must flip the editor to its left.
+  stageNode.props.onPointerDown({ button: 0, pointerId: 2, clientX: 1150, clientY: 300, currentTarget: { setPointerCapture() {} } })
+  stageNode.props.onPointerMove({ clientX: 1250, clientY: 380 })
+  stageNode.props.onPointerUp({ clientX: 1250, clientY: 380 })
+  await settle(runtime, scene.mount)
+  scene.tree = scene.mount()
+
+  check('page: the editor flips to the left when the right edge is full', () => {
+    const sheet = find(scene.tree, (node) => node.props?.className === 'dwa-sheet')
+    const left = Number.parseFloat(sheet.props.style.left)
+    const width = Number.parseFloat(sheet.props.style.width)
+    assert.ok(left + width <= 1140, `editor should sit left of the region: ${left}`)
+    assert.ok(left >= 0, 'editor runs off the window')
+  })
+
+  // Selecting the first chip brings the editor back next to that region.
+  find(scene.tree, (node) => node.props?.className === 'dwa-chip').props.onClick()
+  await runtime.flush()
+  scene.tree = scene.mount()
+
+  check('page: the editor follows the selected region', () => {
+    const sheet = find(scene.tree, (node) => node.props?.className === 'dwa-sheet')
+    const left = Number.parseFloat(sheet.props.style.left)
+    assert.ok(left >= 420 && left <= 460, `editor did not follow the selection: ${left}`)
+    const chip = find(scene.tree, (node) => node.props?.className === 'dwa-chip')
+    assert.equal(chip.props['data-selected'], '1')
   })
 
   const note = find(scene.tree, (node) => node.type === 'textarea')
@@ -529,13 +560,14 @@ async function scenarioPage() {
     assert.equal(canvasLog[0].height, 74, 'crop height ignores the capture scale')
     assert.equal(log.drafted.length, 1, 'createDrafts was not called')
     const files = log.drafted[0].files
-    assert.equal(files.length, 1)
+    assert.equal(files.length, 2, 'both regions should be cropped')
     assert.match(files[0].name, /^page-1-.*\.png$/)
+    assert.match(files[1].name, /^page-2-.*\.png$/)
     assert.equal(log.inits.length, 1)
     assert.equal(log.inits[0].whenDraftExists, 'append')
-    assert.match(log.inits[0].prompt, /我在页面 http:\/\/127\.0\.0\.1:8799\/third 上标了 1 处/)
+    assert.match(log.inits[0].prompt, /我在页面 http:\/\/127\.0\.0\.1:8799\/third 上标了 2 处/)
     assert.match(log.inits[0].prompt, /这个按钮在右键菜单里点不到/)
-    assert.deepEqual(log.attachments, [['draft-0-0']])
+    assert.deepEqual(log.attachments, [['draft-0-0', 'draft-0-1']])
     assert.equal(webview.style.visibility, '', 'the page stayed frozen after inserting')
     assert.equal(log.released.length, 0)
   })
