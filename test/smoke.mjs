@@ -310,23 +310,29 @@ function rect(left, top, width, height) {
 }
 
 function fakeDocument(roots, canvasLog) {
-  const all = []
-  const visit = (node) => {
-    all.push(node)
-    for (const child of node.children) visit(child)
+  // Queries walk the tree on every call, like a real document: the plugin keeps
+  // looking for its pane while a session is open, and a cached list would make
+  // a pane that went away look like it was still there.
+  const collect = () => {
+    const all = []
+    const visit = (node) => {
+      all.push(node)
+      for (const child of node.children) visit(child)
+    }
+    for (const root of roots) visit(root)
+    return all
   }
-  for (const root of roots) visit(root)
   const doc = {
     body: new FakeNode('body'),
     documentElement: new FakeNode('html'),
     querySelectorAll(selector) {
-      return all.filter((node) => node.matches(selector))
+      return collect().filter((node) => node.matches(selector))
     },
     querySelector(selector) {
       return doc.querySelectorAll(selector)[0] ?? null
     },
     elementsFromPoint(x, y) {
-      return all.filter((node) => contains(node.rect, x, y)).reverse()
+      return collect().filter((node) => contains(node.rect, x, y)).reverse()
     },
     createElement(tag) {
       if (tag !== 'canvas') return new FakeNode(tag)
@@ -517,6 +523,14 @@ async function scenarioPage() {
   globalThis.document = fakeDocument([pane], canvasLog)
   globalThis.Image = FakeImage
 
+  // Timers stay quiet: the polls are driven by hand below, which is also how
+  // the pane poll gets exercised without waiting four hundred milliseconds.
+  const realSetInterval = globalThis.setInterval
+  const realClearInterval = globalThis.clearInterval
+  const polls = []
+  globalThis.setInterval = (callback) => { polls.push(callback); return polls.length }
+  globalThis.clearInterval = () => {}
+
   const scene = await mountScenario({ runtime, plugin, ctx, useSessions, stage: rect(260, 100, 1020, 760) })
 
   const trigger = find(scene.tree, (node) => node.type === 'button' && node.props?.className === 'dwa-tool')
@@ -631,14 +645,21 @@ async function scenarioPage() {
   scene.tree = scene.mount()
 
   // Enter in the note box inserts the selected region — there is no button to
-  // click, and the session stays open for the next one.
-  find(scene.tree, (node) => node.type === 'textarea').props.onKeyDown({
-    key: 'Enter',
-    shiftKey: false,
-    preventDefault() {},
-  })
+  // click, and the session stays open for the next one. The press is delivered
+  // twice on purpose: holding the key down repeats it, and both events reach
+  // the handler before React can re-render the (now read-only) box.
+  const enter = { key: 'Enter', shiftKey: false, preventDefault() {} }
+  const noteBox = find(scene.tree, (node) => node.type === 'textarea')
+  noteBox.props.onKeyDown(enter)
+  noteBox.props.onKeyDown(enter)
   await settle(runtime, scene.mount)
   scene.tree = scene.mount()
+
+  check('page: a held Enter inserts the region once', () => {
+    assert.equal(log.drafted.length, 1, 'the same region was pushed twice')
+    assert.equal(log.inits.length, 1, 'the prompt line was appended twice')
+    assert.equal(findAll(scene.tree, (node) => node.props?.className === 'dwa-bubble').length, 1, 'two beads for one region')
+  })
 
   check('page: the selected region is cropped into the composer', () => {
     assert.ok(canvasLog.length >= 1, 'the crop canvas was never built')
@@ -729,8 +750,8 @@ async function scenarioPage() {
 
   // Sending is the only thing that retires the beads. The pruner runs on a timer,
   // so the test grabs the interval callback instead of waiting for real seconds.
-  const realSetInterval = globalThis.setInterval
-  const realClearInterval = globalThis.clearInterval
+  const realSetInterval2 = globalThis.setInterval
+  const realClearInterval2 = globalThis.clearInterval
   let pruners = []
   globalThis.setInterval = (callback) => { pruners.push(callback); return pruners.length }
   globalThis.clearInterval = () => {}
@@ -746,7 +767,7 @@ async function scenarioPage() {
 
     assert.ok(pruners.length > 0, 'no pruner was registered')
     log.phase = 'sending'
-    for (const prune of pruners) prune()
+    for (const pruner of pruners) pruner()
     await runtime.flush()
     scene.tree = scene.mount()
 
@@ -839,6 +860,23 @@ async function scenarioPage() {
     )
   })
 
+  // The sidebar swapped to another tab, so the pane is gone. Without the poll
+  // the frozen bitmap would keep floating over nothing and the <webview> would
+  // stay hidden for good.
+  pane.removeChild(webview)
+  for (const poll of polls) poll()
+  await runtime.flush()
+  scene.tree = scene.mount()
+
+  check('page: the session ends with the pane that hosted it', () => {
+    assert.equal(find(scene.tree, (node) => node.props?.className === 'dwa-freeze'), null, 'the overlay outlived its pane')
+    assert.equal(webview.style.visibility, '', 'the page stayed hidden after the pane went away')
+  })
+
+  globalThis.setInterval = realSetInterval
+  globalThis.clearInterval = realClearInterval
+
+
   check('page: no leftovers in the source', () => {
     for (const marker of ['dwa-entry', 'dwa-panel', 'dwa-backdrop', 'conversation.composer.dock', 'annotate/api', 'web-annotate']) {
       assert.ok(!source.includes(marker), `client.js still mentions ${marker}`)
@@ -899,7 +937,7 @@ async function scenarioText() {
   })
 
   const note = find(scene.tree, (node) => node.type === 'textarea')
-  note.props.onChange({ target: { value: '这句说的缓存问题要写清楚什么时候失效' } })
+  note.props.onChange({ target: { value: '这句说的缓存问题要写清楚\n什么时候失效' } })
   await runtime.flush()
   scene.tree = scene.mount()
 
@@ -915,7 +953,10 @@ async function scenarioText() {
     assert.match(prompt, /^1\. notes\/a\.txt · /, `the line lost its file: ${prompt}`)
     assert.match(prompt, /第 \d+–\d+ 行|第 \d+ 行/, `no line range in prompt: ${prompt}`)
     assert.match(prompt, /缓存失效/)
-    assert.match(prompt, /这句说的缓存问题要写清楚什么时候失效/)
+    // A note typed over two lines still goes in as one line: a bead is found and
+    // removed by its exact line, so a stray break would orphan it.
+    assert.equal(prompt.split('\n').length, 1, `the line broke in two: ${JSON.stringify(prompt)}`)
+    assert.match(prompt, /这句说的缓存问题要写清楚 什么时候失效/)
     // No header and no trailer around the line any more.
     assert.ok(!prompt.includes('我在'), 'the header came back')
     assert.ok(!prompt.includes('定位以引号里的文字为准'), 'the trailer came back')

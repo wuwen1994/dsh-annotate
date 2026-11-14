@@ -39,6 +39,8 @@ window.__ModuleLoader__.load({
       sbNoCapture: '当前环境不支持网页截图。',
       sbInserting: '正在插入…',
       bubbleHint: '点开编辑这条批注',
+      bubbleRemove: '删掉这条批注（提示词和裁图一并删掉）',
+      sbNoCrop: '这一页现在不在屏幕上，批注已插入，但没有带上裁图。',
       sbAnchorPage: '第 {page}/{total} 页',
       sbAnchorPageSolo: '第 {page} 页',
       sbAnchorLines: '第 {from}–{to} 行',
@@ -65,6 +67,8 @@ window.__ModuleLoader__.load({
       sbNoCapture: 'This environment cannot capture the page.',
       sbInserting: 'Inserting…',
       bubbleHint: 'Open this note again',
+      bubbleRemove: 'Delete this note (the prompt line and its crop go too)',
+      sbNoCrop: 'That page is off screen now, so the note went in without its picture.',
       sbAnchorPage: 'page {page}/{total}',
       sbAnchorPageSolo: 'page {page}',
       sbAnchorLines: 'lines {from}–{to}',
@@ -172,6 +176,7 @@ window.__ModuleLoader__.load({
       .dwa-sb-n { position: absolute; top: -10px; left: -10px; min-width: 18px; height: 18px; padding: 0 5px; border-radius: 999px;
         background: #e5484d; color: #fff; font-size: 11px; font-weight: 600; line-height: 18px; text-align: center; }
       .dwa-sb-box[data-selected='1'] .dwa-sb-n { background: #2f6fed; }
+      .dwa-sb-box[data-inside='1'] .dwa-sb-n { top: 2px; left: 2px; }
       .dwa-sb-ghost { position: absolute; border: 1px dashed #e5484d; background: rgba(229,72,77,.1); }
 
       .dwa-sheet { position: fixed; z-index: 1401; width: min(320px, calc(100vw - 24px)); max-height: calc(100vh - 20px); overflow-y: auto; display: flex; flex-direction: column; gap: 6px;
@@ -657,8 +662,11 @@ window.__ModuleLoader__.load({
       // the line, so the note still says what it is about once it leaves here.
       const path = source && source.path ? source.path : ''
       const place = [path, where].filter(Boolean).join(' · ')
-      const note = box.note && box.note.trim() ? box.note.trim() : t('promptNoNote')
-      return `${number}. ${place ? `${place} · ` : ''}${note}`
+      // One region is one line: a note typed over several lines would otherwise
+      // break the draft bookkeeping (a bead is found and removed by its line),
+      // so its breaks become spaces here.
+      const written = box.note && box.note.trim() ? box.note.trim().replace(/\s*\n\s*/g, ' ') : t('promptNoNote')
+      return `${number}. ${place ? `${place} · ` : ''}${written}`
     }
 
     // -------------------------------------------------------------- composer IO
@@ -806,12 +814,21 @@ window.__ModuleLoader__.load({
       const [editing, setEditing] = useState(null)
 
       const viewRef = useRef(null)
+      const viewVisibilityRef = useRef('')
       const stageRef = useRef(null)
       const dragRef = useRef(null)
       const noteRefs = useRef({})
       const shotRef = useRef(null)
       const targetRef = useRef(null)
       const slotRef = useRef(null)
+      // Filled in below: the pane poll has to close an open session when the
+      // sidebar swaps to another tab, and `cancel` is defined after it.
+      const cancelRef = useRef(null)
+      // A capture is in flight: two clicks must not start two sessions.
+      const openingRef = useRef(false)
+      // One write at a time: holding down Enter would otherwise push the same
+      // region twice before React re-renders the read-only textarea.
+      const writingRef = useRef(false)
       const seqRef = useRef(0)
       const sentRef = useRef([])
       const boxesRef = useRef([])
@@ -843,6 +860,17 @@ window.__ModuleLoader__.load({
         let last = ''
         const sync = () => {
           const found = findTarget()
+          // The pane can swap tabs, navigate, or close while a session is open.
+          // The frozen bitmap would keep floating over nothing (and a hidden
+          // <webview> would stay hidden), so the session ends with its target.
+          const open = shotRef.current
+          if (open) {
+            const bound = targetRef.current
+            if (!found || !bound || found.node !== bound.node) {
+              if (cancelRef.current) cancelRef.current()
+              return
+            }
+          }
           placeSlot(found)
           const key = found
             ? `${found.kind}:${Math.round(found.rect.left)}:${Math.round(found.rect.top)}:${Math.round(found.rect.width)}:${Math.round(found.rect.height)}`
@@ -869,7 +897,9 @@ window.__ModuleLoader__.load({
         const view = viewRef.current
         viewRef.current = null
         if (!view) return
-        try { view.style.visibility = '' } catch { /* frame is gone */ }
+        // Put back exactly what was there before the page was hidden.
+        try { view.style.visibility = viewVisibilityRef.current || '' } catch { /* frame is gone */ }
+        viewVisibilityRef.current = ''
       }, [])
 
       const cancel = useCallback(() => {
@@ -886,15 +916,21 @@ window.__ModuleLoader__.load({
         setBusy(false)
         setError('')
       }, [unfreeze])
+      cancelRef.current = cancel
 
       useEffect(() => () => unfreeze(), [unfreeze])
 
       const openMarkup = useCallback(async () => {
-        // Already marking: the icon is still visible in the pane's toolbar, so
-        // a second click must not start a nested session.
-        if (shotRef.current) return
+        // Already marking, or a capture is on its way: the icon is still
+        // visible in the pane's toolbar, so a second click must not start a
+        // nested session.
+        if (shotRef.current || openingRef.current) return
+        openingRef.current = true
         const found = findTarget()
         if (!found) {
+          // Nothing to mark: the click has to be forgotten, or the guard above
+          // would keep the icon dead for the rest of the session.
+          openingRef.current = false
           setError(t('sbNoPage'))
           return
         }
@@ -919,7 +955,12 @@ window.__ModuleLoader__.load({
             const scale = natural && natural.width > 0 ? natural.width / found.rect.width : 1
             shotRef.current = { kind: 'browser', src, scale, width, height, url, left, top, left0: found.rect.left, top0: found.rect.top }
             viewRef.current = found.node
-            try { found.node.style.visibility = 'hidden' } catch { /* not styleable */ }
+            try {
+              // Remember what the page wore, so hiding it here never undoes
+              // something the host set for another reason.
+              viewVisibilityRef.current = found.node.style.visibility || ''
+              found.node.style.visibility = 'hidden'
+            } catch { /* not styleable */ }
             targetRef.current = found
             setBoxes([])
             setSelected(null)
@@ -947,6 +988,7 @@ window.__ModuleLoader__.load({
           unfreeze()
           setError(t('errShot', { msg: (cause && cause.message) || 'unknown' }))
         } finally {
+          openingRef.current = false
           setBusy(false)
         }
       }, [t, unfreeze])
@@ -1058,7 +1100,14 @@ window.__ModuleLoader__.load({
         setEditing(null)
 
         if (source.kind === 'browser') {
-          const box = { id, order, n: number, x: rect.x, y: rect.y, w: rect.w, h: rect.h, note: '', anchor: {} }
+          // The position word is known right away; the DOM details (element
+          // path, heading, quoted text) arrive a moment later. Keeping the word
+          // on the box from the start means an immediate Enter still writes a
+          // line that says where the region is.
+          const where = positionWord(t,
+            clamp01((rect.x + rect.w / 2) / Math.max(1, source.width)),
+            clamp01((rect.y + rect.h / 2) / Math.max(1, source.height)))
+          const box = { id, order, n: number, x: rect.x, y: rect.y, w: rect.w, h: rect.h, note: '', where, anchor: {} }
           renumber(sentRef.current, boxesRef.current.concat(box), null)
           setSelected(id)
           const viewRect = {
@@ -1067,12 +1116,9 @@ window.__ModuleLoader__.load({
             width: rect.w,
             height: rect.h,
           }
-          const where = positionWord(t,
-            clamp01((rect.x + rect.w / 2) / Math.max(1, source.width)),
-            clamp01((rect.y + rect.h / 2) / Math.max(1, source.height)))
           void pageAnchor(target.node, viewRect, target).then((found) => {
             setBoxes((previous) => previous.map((item) => (item.id === id
-              ? { ...item, where, selector: found.selector, heading: found.heading, quote: found.quote }
+              ? { ...item, selector: found.selector, heading: found.heading, quote: found.quote }
               : item)))
           })
         } else {
@@ -1139,7 +1185,7 @@ window.__ModuleLoader__.load({
         const rest = boxes.filter((box) => box.id !== id)
         setSelected((current) => (current === id ? null : current))
         // A live region just went away, so the beads after it move up a number.
-        renumber(sent, rest, null)
+        renumber(sentRef.current, rest, null)
       }
 
       /** Composer services for the session on screen, or null. */
@@ -1202,7 +1248,10 @@ window.__ModuleLoader__.load({
       /** Where a committed region sits in the viewport right now. */
       const bubblePoint = (entry) => {
         const live = entry.live
-        const pane = anchor
+        // A bead belongs to the pane it was drawn on: when the sidebar swaps to
+        // another tab, the current pane's origin would drag the bead onto it.
+        const same = !entry.paneKind || (anchor && anchor.kind === entry.paneKind)
+        const pane = same ? anchor : null
         const left = pane ? pane.left : entry.left
         const top = pane ? pane.top : entry.top
         return {
@@ -1225,17 +1274,25 @@ window.__ModuleLoader__.load({
         if (!source || !target) return
         const box = selectedBox || boxes[boxes.length - 1] || null
         if (!box) return
+        // Enter auto-repeats; a second pass would append the same region (and
+        // crop) twice, so a write already in flight wins.
+        if (writingRef.current) return
+        writingRef.current = true
         setError('')
         setBusy(true)
+        let missed = false
         try {
           const renderer = documentKind(target.root)
           let blob = null
           if (source.kind === 'browser') {
             blob = await cropSnapshot(source, box)
+            missed = !blob
           } else if (box.anchor && box.anchor.page) {
             blob = await cropPdfPage(target.root, box)
+            missed = !blob
           } else if (renderer === 'image') {
             blob = await cropImage(target, box, scrollOf(target))
+            missed = !blob
           }
           const files = blob ? [new File([blob], `page-${box.n}-${stamp()}.png`, { type: 'image/png' })] : []
           const text = buildLine(t, box, { kind: source.kind, url: source.url || '', path: source.path || '' }, box.n)
@@ -1256,6 +1313,7 @@ window.__ModuleLoader__.load({
             // is gone, and the rewritten line needs the same path as the first.
             source: { kind: source.kind, url: source.url || '', path: source.path || '' },
             live: shot.mode === 'live',
+            paneKind: source.kind,
             left: pane ? pane.left : 0,
             top: pane ? pane.top : 0,
             // Draft attachment ids: deleting the bead has to drop the picture as
@@ -1264,11 +1322,16 @@ window.__ModuleLoader__.load({
           }
           // The inserted region leaves the picture; whatever is left renumbers,
           // including the line we just wrote if an older region is still open.
-          renumber(sent.concat(entry), boxes.filter((item) => item.id !== box.id), null)
+          renumber(sentRef.current.concat(entry), boxesRef.current.filter((item) => item.id !== box.id), null)
           setSelected(null)
+          // A page can scroll out of the window between drawing and inserting;
+          // the line still locates the spot, but the user should know the
+          // picture is missing rather than silently getting a bare note.
+          if (missed) setError(t('sbNoCrop'))
         } catch (cause) {
           setError(t('errCrop', { msg: (cause && cause.message) || 'unknown' }))
         } finally {
+          writingRef.current = false
           setBusy(false)
         }
       }
@@ -1286,10 +1349,15 @@ window.__ModuleLoader__.load({
           setEditing(null)
           return
         }
+        if (writingRef.current) return
+        writingRef.current = true
+        // The bead remembers what it was drawn on: a session opened later on a
+        // different file must not rewrite this line with that file's path.
         const source = shotRef.current
-        const shape = source
-          ? { kind: source.kind, url: source.url || '', path: source.path || '' }
-          : (entry.source || { kind: 'document', url: '', path: '' })
+        const shape = entry.source
+          || (source
+            ? { kind: source.kind, url: source.url || '', path: source.path || '' }
+            : { kind: 'document', url: '', path: '' })
         const next = buildLine(t, { ...entry.box, note: entry.note }, shape, entry.n)
         const services = composer()
         setBusy(true)
@@ -1309,6 +1377,7 @@ window.__ModuleLoader__.load({
         } catch (cause) {
           setError(t('errCrop', { msg: (cause && cause.message) || 'unknown' }))
         } finally {
+          writingRef.current = false
           setBusy(false)
           setEditing(null)
         }
@@ -1391,7 +1460,7 @@ window.__ModuleLoader__.load({
       const deleteBead = (order) => {
         const entry = sent.find((item) => item.order === order)
         if (!entry) return
-        renumber(sent.filter((item) => item.order !== order), boxes, entry.line)
+        renumber(sentRef.current.filter((item) => item.order !== order), boxesRef.current, entry.line)
         // The line is gone, so its picture has to go too — otherwise the crop
         // stays in the composer and gets sent with nothing pointing at it.
         const services = composer()
@@ -1449,7 +1518,7 @@ window.__ModuleLoader__.load({
               style: { left: `${spot.left}px`, top: `${spot.top}px`, width: `${width}px` },
             },
             el('div', { className: 'dwa-sheet-bar' },
-              el('button', { type: 'button', className: 'dwa-x', title: t('close'), onClick: closeCard }, '✕')),
+              el('button', { type: 'button', className: 'dwa-x', title: editingEntry ? t('bubbleRemove') : t('close'), onClick: closeCard }, '✕')),
             card,
             error ? el('div', { className: 'dwa-error' }, error) : null)
             : null,
@@ -1507,7 +1576,7 @@ window.__ModuleLoader__.load({
         ? null
         : [
           el('div', { className: 'dwa-sheet-bar' },
-            el('button', { type: 'button', className: 'dwa-x', title: t('close'), onClick: closeCard }, '✕')),
+            el('button', { type: 'button', className: 'dwa-x', title: editingEntry ? t('bubbleRemove') : t('close'), onClick: closeCard }, '✕')),
           noteEditor(),
           error ? el('div', { className: 'dwa-error' }, error) : null,
         ]
@@ -1528,20 +1597,28 @@ window.__ModuleLoader__.load({
         onWheel,
       },
         live ? null : el('img', { src: shot.src, alt: '', draggable: false }),
-        boxes.map((box) => el('div', {
-          key: box.id,
-          className: 'dwa-sb-box',
-          'data-selected': selected === box.id ? '1' : '0',
-          style: {
-            left: `${((live ? box.x - scroll.x : box.x) / Math.max(1, shot.width)) * 100}%`,
-            top: `${((live ? box.y - scroll.y : box.y) / Math.max(1, shot.height)) * 100}%`,
-            width: `${(box.w / Math.max(1, shot.width)) * 100}%`,
-            height: `${(box.h / Math.max(1, shot.height)) * 100}%`,
+        boxes.map((box) => {
+          // Viewport-relative offset inside the picture; a region drawn flush
+          // against the top-left corner would get its badge clipped by the
+          // freeze frame, so the badge flips inside for those.
+          const boxLeft = live ? box.x - scroll.x : box.x
+          const boxTop = live ? box.y - scroll.y : box.y
+          return el('div', {
+            key: box.id,
+            className: 'dwa-sb-box',
+            'data-selected': selected === box.id ? '1' : '0',
+            'data-inside': boxLeft < 12 || boxTop < 12 ? '1' : '0',
+            style: {
+              left: `${(boxLeft / Math.max(1, shot.width)) * 100}%`,
+              top: `${(boxTop / Math.max(1, shot.height)) * 100}%`,
+              width: `${(box.w / Math.max(1, shot.width)) * 100}%`,
+              height: `${(box.h / Math.max(1, shot.height)) * 100}%`,
+            },
+            onPointerDown: (event) => event.stopPropagation(),
+            onClick: (event) => { event.stopPropagation(); setEditing(null); setSelected(box.id) },
           },
-          onPointerDown: (event) => event.stopPropagation(),
-          onClick: (event) => { event.stopPropagation(); setEditing(null); setSelected(box.id) },
-        },
-        el('div', { className: 'dwa-sb-n' }, String(box.n)))),
+          el('div', { className: 'dwa-sb-n' }, String(box.n)))
+        }),
         dragging
           ? el('div', {
             className: 'dwa-sb-ghost',
