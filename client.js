@@ -1,0 +1,1185 @@
+/**
+ * Client half of the web-annotate bundle.
+ *
+ * A floating button rides on top of whatever the built-in right sidebar shows:
+ * the sandboxed browser tab (an Electron <webview>) or the document preview
+ * (PDF, Markdown, plain text, code …). It freezes pixels when the target is a
+ * page, overlays live boxes when the target is a document, and drops the crops
+ * plus a numbered prompt — every line carries a locator (page number, line
+ * range, heading, quoted text) — into the composer.
+ */
+window.__ModuleLoader__.load({
+  id: 'dsh-web-annotate',
+  factory(require) {
+    const React = require('react')
+    const { createPortal } = require('react-dom')
+    const { useState, useRef, useEffect, useCallback, useMemo } = React
+    const el = (tag, props, ...children) => React.createElement(tag, props, ...children)
+
+    const NS = 'webAnnotate'
+    const MIN_SIDE = 6
+    const QUOTE_MAX = 180
+    const LOCATOR_MAX = 120
+
+    const ZH = {
+      close: '关闭',
+      notePlaceholder: '这里要改什么？',
+      remove: '删除',
+      insert: '插入输入框',
+      promptNoNote: '（未写批注）',
+      posLt: '左上', posCt: '上方居中', posRt: '右上',
+      posLm: '左侧居中', posCm: '页面中部', posRm: '右侧居中',
+      posLb: '左下', posCb: '下方居中', posRb: '右下',
+      errBusy: '输入框正忙，稍后再试。',
+      errUnavailable: '当前离线，或者这个会话无法写入输入框。',
+      errCrop: '裁切标注区域失败：{msg}',
+      errShot: '截图失败：{msg}',
+      sbButtonPage: '标注页面',
+      sbButtonDoc: '标注文档',
+      sbButtonHint: '截取右侧栏当前的画面，圈出区域写批注',
+      sbHelp: '拖动圈选 · 点编号写批注 · Esc 取消',
+      sbEmpty: '在画面上拖出一个方框，再写批注。',
+      sbTip: '在画面上拖出要标注的区域',
+      sbPickHint: '点编号写批注，或继续框选新区域',
+      sbNeedSession: '先在左侧选一个会话，批注才能插进输入框。',
+      sbNoPage: '右侧栏里还没有打开的网页或文件。',
+      sbNoCapture: '当前环境不支持网页截图。',
+      sbInserting: '正在插入…',
+      sbPromptHeader: '我在页面 {url} 上标了 {n} 处，编号与附图一致（每张附图是对应区域的截图）：',
+      sbPromptNoUrl: '我在右侧栏的页面截图里标了 {n} 处，编号与附图一致（每张附图是对应区域的截图）：',
+      sbPromptDoc: '我在「{path}」里标了 {n} 处，编号与附图一致（每张附图是对应区域的截图）：',
+      sbPromptDocNoImage: '我在「{path}」里标了 {n} 处，每条都带定位信息和被标注的文字：',
+      sbPromptCheck: '（定位以引号里的文字为准：页码/行号对不上时，请先按这段文字在文件里定位，再作答。）',
+      sbUntitled: '这个文件',
+      sbAnchorPage: '第 {page}/{total} 页',
+      sbAnchorPageSolo: '第 {page} 页',
+      sbAnchorLines: '第 {from}–{to} 行',
+      sbAnchorLine: '第 {line} 行',
+      sbAnchorHeading: '「{heading}」小节',
+      sbAnchorElement: '<{tag}> 区域',
+      sbAnchorFile: '这个文件',
+    }
+
+    const EN = {
+      close: 'Close',
+      notePlaceholder: 'What should change here?',
+      remove: 'Remove',
+      insert: 'Insert into composer',
+      promptNoNote: '(no note)',
+      posLt: 'top left', posCt: 'top centre', posRt: 'top right',
+      posLm: 'centre left', posCm: 'centre', posRm: 'centre right',
+      posLb: 'bottom left', posCb: 'bottom centre', posRb: 'bottom right',
+      errBusy: 'The composer is busy. Try again in a moment.',
+      errUnavailable: 'Offline, or this session cannot accept a composer draft.',
+      errCrop: 'Could not crop the marked region: {msg}',
+      errShot: 'Could not capture the page: {msg}',
+      sbButtonPage: 'Annotate page',
+      sbButtonDoc: 'Annotate file',
+      sbButtonHint: 'Capture what the sidebar shows, box the regions and write notes',
+      sbHelp: 'Drag to box · click a number to write · Esc to cancel',
+      sbEmpty: 'Drag a box on the picture, then write a note.',
+      sbTip: 'Drag out the region you want to annotate',
+      sbPickHint: 'Click a number to write, or box another region',
+      sbNeedSession: 'Pick a session on the left so the notes have a composer to land in.',
+      sbNoPage: 'The sidebar is not showing a page or a file.',
+      sbNoCapture: 'This environment cannot capture the page.',
+      sbInserting: 'Inserting…',
+      sbPromptHeader: 'I marked {n} place(s) on {url}; the numbers match the attached images (each image is a crop of that region):',
+      sbPromptNoUrl: 'I marked {n} place(s) on the sidebar screenshot; the numbers match the attached images:',
+      sbPromptDoc: 'I marked {n} place(s) in "{path}"; the numbers match the attached images (each image is a crop of that region):',
+      sbPromptDocNoImage: 'I marked {n} place(s) in "{path}"; each line names where it is and quotes the marked text:',
+      sbPromptCheck: '(Trust the quoted text for locating: if the page or line number does not match, find that text in the file first.)',
+      sbUntitled: 'this file',
+      sbAnchorPage: 'page {page}/{total}',
+      sbAnchorPageSolo: 'page {page}',
+      sbAnchorLines: 'lines {from}–{to}',
+      sbAnchorLine: 'line {line}',
+      sbAnchorHeading: 'under "{heading}"',
+      sbAnchorElement: 'in <{tag}>',
+      sbAnchorFile: 'this file',
+    }
+
+    function translator(dict) {
+      return (key, params) => {
+        const pattern = dict[key] ?? key
+        if (!params) return pattern
+        return String(pattern).replace(/\{(\w+)\}/g, (whole, name) => (params[name] === undefined ? whole : String(params[name])))
+      }
+    }
+
+    function prefersEnglish() {
+      try {
+        const lang = (document.documentElement && document.documentElement.getAttribute('lang')) || ''
+        if (/^en/i.test(lang)) return true
+        if (/^en/i.test(String(navigator.language || ''))) return true
+        if (lang) return false
+      } catch { /* no document yet */ }
+      return false
+    }
+
+    /** Host `t` when it knows our keys, our own dictionary otherwise. */
+    function resolveT(hostT) {
+      const fallback = translator(prefersEnglish() ? EN : ZH)
+      if (typeof hostT !== 'function') return fallback
+      return (key, params) => {
+        const text = hostT(key, params)
+        return text === undefined || text === null || text === key ? fallback(key, params) : text
+      }
+    }
+
+    const clamp01 = (value) => Math.min(1, Math.max(0, value))
+
+    function positionWord(t, cx, cy) {
+      const row = cy < 0.34 ? 't' : cy < 0.67 ? 'c' : 'b'
+      const col = cx < 0.34 ? 'l' : cx < 0.67 ? 'c' : 'r'
+      return t(`pos${col.toUpperCase()}${row}`)
+    }
+
+    function normalizeRect(start, end) {
+      const x = Math.min(start.x, end.x)
+      const y = Math.min(start.y, end.y)
+      return { x, y, w: Math.abs(end.x - start.x), h: Math.abs(end.y - start.y) }
+    }
+
+    function stamp() {
+      const now = new Date()
+      const pad = (value) => String(value).padStart(2, '0')
+      return `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}-${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`
+    }
+
+    function shrink(text, max) {
+      const flat = String(text || '').replace(/\s+/g, ' ').trim()
+      return flat.length <= max ? flat : `${flat.slice(0, max - 1)}…`
+    }
+
+    function rectOf(node) {
+      try { return node.getBoundingClientRect() } catch { return null }
+    }
+
+    function queryAll(root, selector) {
+      try { return Array.prototype.slice.call(root.querySelectorAll(selector)) } catch { return [] }
+    }
+
+    function query(root, selector) {
+      try { return root.querySelector(selector) } catch { return null }
+    }
+
+    const CSS = `
+      .dwa-btn { display: inline-flex; align-items: center; gap: 6px; padding: 6px 12px; font: inherit; font-size: 13px; cursor: pointer;
+        color: var(--dsw-alias-label-primary, #111); background: transparent; border: 1px solid var(--dsw-alias-border-l2, rgba(0,0,0,.14));
+        border-radius: var(--dsw-radius-sm, 6px); white-space: nowrap; }
+      .dwa-btn:hover { background: var(--dsw-alias-interactive-bg-hover, rgba(127,127,127,.12)); }
+      .dwa-btn[disabled] { opacity: .5; cursor: default; }
+      .dwa-btn-primary { color: #fff; background: var(--dsw-alias-brand-primary, #3b82f6); border-color: transparent; }
+      .dwa-btn-primary:hover { filter: brightness(1.06); }
+      .dwa-error { color: #e5484d; font-size: 12px; }
+
+      /* Floating "annotate" button over whatever the sidebar shows. */
+      .dwa-float { position: fixed; z-index: 1400; display: inline-flex; align-items: center; gap: 5px; height: 28px; padding: 0 10px;
+        border: 1px solid var(--dsw-alias-border-l1, rgba(0,0,0,.1)); border-radius: 999px; cursor: pointer;
+        background: var(--dsw-specific-menu, #fff); color: var(--dsw-alias-label-secondary, #4a4f57);
+        font: inherit; font-size: 12px; white-space: nowrap; box-shadow: 0 4px 14px rgba(0,0,0,.18); }
+      .dwa-float:hover { color: var(--dsw-alias-label-primary, #111); border-color: var(--dsw-alias-border-l2, rgba(0,0,0,.16)); }
+      .dwa-float svg { width: 14px; height: 14px; }
+      .dwa-sb-toast { position: fixed; z-index: 1400; max-width: 260px; padding: 6px 10px; border-radius: var(--dsw-radius-sm, 6px);
+        background: rgba(229,72,77,.96); color: #fff; font-size: 12px; line-height: 1.45; box-shadow: 0 6px 18px rgba(0,0,0,.24); }
+
+      .dwa-freeze { position: fixed; z-index: 1400; overflow: hidden; background: #0b0d12; }
+      .dwa-freeze[data-mode='live'] { background: transparent; box-shadow: inset 0 0 0 2px var(--dsw-alias-brand-primary, #3b82f6); }
+      .dwa-stage { position: absolute; inset: 0; cursor: crosshair; touch-action: none; }
+      .dwa-stage img { display: block; width: 100%; height: 100%; object-fit: fill; pointer-events: none; user-select: none; }
+      .dwa-sb-box { position: absolute; box-sizing: border-box; border: 2px solid #e5484d; background: rgba(229,72,77,.16); cursor: pointer; }
+      .dwa-sb-box[data-selected='1'] { border-color: #2f6fed; background: rgba(47,111,237,.18); }
+      .dwa-sb-n { position: absolute; top: -10px; left: -10px; min-width: 18px; height: 18px; padding: 0 5px; border-radius: 999px;
+        background: #e5484d; color: #fff; font-size: 11px; font-weight: 600; line-height: 18px; text-align: center; }
+      .dwa-sb-box[data-selected='1'] .dwa-sb-n { background: #2f6fed; }
+      .dwa-sb-ghost { position: absolute; border: 1px dashed #e5484d; background: rgba(229,72,77,.1); }
+
+      .dwa-sheet { position: fixed; z-index: 1401; width: min(320px, calc(100vw - 24px)); display: flex; flex-direction: column; gap: 6px;
+        padding: 8px 10px 10px; border-radius: var(--dsw-radius-lg, 10px);
+        background: var(--dsw-specific-menu, rgba(255,255,255,.96));
+        border: 1px solid var(--dsw-alias-border-l1, rgba(0,0,0,.1)); box-shadow: 0 10px 30px rgba(0,0,0,.28); }
+      .dwa-sheet[data-compact='1'] { padding: 6px 8px; }
+      .dwa-tip { position: absolute; left: 50%; top: 10px; transform: translateX(-50%); padding: 4px 10px; border-radius: 999px;
+        background: rgba(12,14,20,.72); color: #fff; font-size: 11px; line-height: 1.5; white-space: nowrap; pointer-events: none; }
+      .dwa-sheet-bar { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+      .dwa-chip { min-width: 22px; height: 22px; padding: 0 6px; border-radius: 999px; border: 1px solid var(--dsw-alias-border-l2, rgba(0,0,0,.14));
+        background: transparent; color: var(--dsw-alias-label-secondary, #4a4f57); font: inherit; font-size: 12px; cursor: pointer; }
+      .dwa-chip[data-selected='1'] { background: var(--dsw-alias-brand-primary, #2f6fed); border-color: transparent; color: #fff; }
+      .dwa-sheet-hint { flex: 1; min-width: 80px; font-size: 11px; color: var(--dsw-alias-label-tertiary, #8a8f98); }
+      .dwa-anchor { font-size: 11px; line-height: 1.45; color: var(--dsw-alias-label-tertiary, #8a8f98); }
+      .dwa-anchor b { font-weight: 600; color: var(--dsw-alias-label-secondary, #4a4f57); }
+      .dwa-anchor q { quotes: '「' '」'; color: var(--dsw-alias-label-secondary, #4a4f57); }
+      .dwa-sheet textarea { width: 100%; box-sizing: border-box; min-height: 44px; max-height: 96px; resize: vertical; padding: 6px 8px;
+        font: inherit; font-size: 13px; color: var(--dsw-alias-label-primary, #111); background: var(--dsw-alias-bg-l1, rgba(127,127,127,.06));
+        border: 1px solid var(--dsw-alias-border-l2, rgba(0,0,0,.12)); border-radius: var(--dsw-radius-sm, 6px); outline: none; }
+      .dwa-sheet-foot { display: flex; align-items: center; gap: 8px; }
+      .dwa-sheet-gap { flex: 1; }
+      .dwa-x { width: 22px; height: 22px; margin-left: auto; border: none; border-radius: var(--dsw-radius-sm, 6px); background: transparent;
+        color: var(--dsw-alias-label-tertiary, #8a8f98); font: inherit; font-size: 13px; line-height: 1; cursor: pointer; }
+      .dwa-x:hover { background: var(--dsw-alias-interactive-bg-hover, rgba(127,127,127,.14)); color: var(--dsw-alias-label-primary, #111); }
+    `
+
+    function FrameIcon() {
+      return el('svg', { viewBox: '0 0 16 16', fill: 'none', 'aria-hidden': 'true' },
+        el('rect', { x: 1.5, y: 2.5, width: 13, height: 11, rx: 1.6, stroke: 'currentColor', strokeWidth: 1.2 }),
+        el('path', { d: 'M1.5 6h13', stroke: 'currentColor', strokeWidth: 1.2 }),
+        el('rect', { x: 4, y: 8, width: 5.5, height: 4, rx: 0.8, stroke: '#e5484d', strokeWidth: 1.2, fill: 'rgba(229,72,77,.14)' }))
+    }
+
+    // ------------------------------------------------------------------ targets
+
+    const SIDEBAR_FRAME = 'webview[data-sidebar-browser-frame]'
+    const PREVIEW_ROOT = '[data-document-preview]'
+    const PREVIEW_BODY = '[data-textpreview-body]'
+    const PREVIEW_SCROLL = '[data-document-zoom-scrollport]'
+    const PREVIEW_PATH = '[data-textpreview-path]'
+
+    function bigEnough(rect) {
+      return Boolean(rect) && rect.width >= 200 && rect.height >= 160
+    }
+
+    /**
+     * What the sidebar is showing right now. The browser tab wins because its
+     * frame paints over the document pane when both are mounted.
+     */
+    function findTarget() {
+      for (const node of queryAll(document, SIDEBAR_FRAME)) {
+        const rect = rectOf(node)
+        if (bigEnough(rect)) return { kind: 'browser', node, rect, root: node, scroll: null }
+      }
+      for (const root of queryAll(document, PREVIEW_ROOT)) {
+        const body = query(root, PREVIEW_BODY) || root
+        const scroll = query(body, PREVIEW_SCROLL) || body
+        const rect = rectOf(scroll)
+        if (!bigEnough(rect)) continue
+        return { kind: 'document', node: root, root, body, scroll, rect }
+      }
+      return null
+    }
+
+    function documentKind(root) {
+      try { return root.getAttribute('data-document-preview') || '' } catch { return '' }
+    }
+
+    function documentPath(root) {
+      // The path label sits in the frame header, one level above the renderer.
+      const where = [root, root && root.parentElement, document]
+      for (const scope of where) {
+        if (!scope) continue
+        const label = query(scope, PREVIEW_PATH)
+        const shown = label && label.textContent ? String(label.textContent).trim() : ''
+        if (shown) return shown
+      }
+      let url = ''
+      try { url = root.getAttribute('data-textpreview-url') || '' } catch { url = '' }
+      return prettyPath(url)
+    }
+
+    function prettyPath(url) {
+      if (!url) return ''
+      let text = url
+      try { text = decodeURIComponent(url) } catch { text = url }
+      text = text.replace(/^file:\/\/\//, '').replace(/^file:\/\//, '')
+      return text
+    }
+
+    function scrollOf(target) {
+      const node = target && target.scroll
+      if (!node) return { x: 0, y: 0 }
+      return { x: Number(node.scrollLeft) || 0, y: Number(node.scrollTop) || 0 }
+    }
+
+    /** Topmost element at a viewport point, ignoring our own overlay. */
+    function elementAt(x, y, own) {
+      const stack = typeof document.elementsFromPoint === 'function'
+        ? document.elementsFromPoint(x, y)
+        : [document.elementFromPoint(x, y)]
+      for (const node of stack) {
+        if (!node || node === document || node === document.body || node === document.documentElement) continue
+        if (own && typeof node.closest === 'function' && node.closest(own)) continue
+        return node
+      }
+      return null
+    }
+
+    function intersects(rect, box) {
+      return Boolean(rect) && rect.right > box.left + 0.5 && rect.left < box.right - 0.5
+        && rect.bottom > box.top + 0.5 && rect.top < box.bottom - 0.5
+    }
+
+    /** Leaf-ish text elements that overlap the box, in reading order. */
+    function textHits(scope, box, selector) {
+      const hits = []
+      for (const node of queryAll(scope, selector)) {
+        const text = node.textContent === null || node.textContent === undefined ? '' : String(node.textContent)
+        if (!text.trim()) continue
+        const rect = rectOf(node)
+        if (!intersects(rect, box)) continue
+        hits.push({ node, text, rect })
+      }
+      hits.sort((left, right) => (left.rect.top - right.rect.top) || (left.rect.left - right.rect.left))
+      return hits
+    }
+
+    function joinHits(hits) {
+      const seen = new Set()
+      const parts = []
+      for (const hit of hits) {
+        const flat = hit.text.replace(/\s+/g, ' ').trim()
+        if (!flat || seen.has(flat)) continue
+        seen.add(flat)
+        parts.push(flat)
+      }
+      return parts.join(' ').replace(/\s+/g, ' ').trim()
+    }
+
+    function headingOf(node, scope) {
+      let current = node
+      while (current && current !== scope) {
+        const tag = current.tagName ? String(current.tagName).toLowerCase() : ''
+        if (/^h[1-6]$/.test(tag)) {
+          const text = current.textContent ? String(current.textContent).trim() : ''
+          if (text) return shrink(text, 60)
+        }
+        current = current.parentElement
+      }
+      return ''
+    }
+
+    /** The PDF page under a point, when the text layer has no span exactly there. */
+    function pageUnder(pages, x, y) {
+      let best = null
+      let bestArea = Number.POSITIVE_INFINITY
+      for (const page of pages) {
+        const rect = rectOf(page)
+        if (!rect || rect.width <= 0 || rect.height <= 0) continue
+        if (x < rect.left || x > rect.right || y < rect.top || y > rect.bottom) continue
+        const area = rect.width * rect.height
+        if (area < bestArea) {
+          best = page
+          bestArea = area
+        }
+      }
+      return best
+    }
+
+    const TEXT_SELECTOR = 'p, li, td, th, h1, h2, h3, h4, h5, h6, pre, code, blockquote, dt, dd, figcaption, span'
+
+    /**
+     * Everything needed to point a later reader at this spot: page number, line
+     * range, enclosing heading, and the text that sits inside the box. The
+     * snapshot is taken while the box is drawn, so scrolling afterwards cannot
+     * desync it from the note.
+     */
+    function readAnchor(target, viewRect, own) {
+      const anchor = { page: 0, pages: 0, from: 0, to: 0, heading: '', quote: '', tag: '', kind: '' }
+      if (!target) return anchor
+      const box = {
+        left: viewRect.left,
+        top: viewRect.top,
+        right: viewRect.left + viewRect.width,
+        bottom: viewRect.top + viewRect.height,
+      }
+      try {
+        if (target.kind === 'browser') return anchor
+        const scope = target.scroll || target.body || target.root
+        const kind = documentKind(target.root)
+        anchor.kind = kind
+        const center = {
+          x: box.left + Math.min(viewRect.width / 2, 40),
+          y: box.top + Math.min(viewRect.height / 2, 40),
+        }
+        const node = elementAt(center.x, center.y, own) || elementAt(box.left + 2, box.top + 2, own)
+        if (node && node.tagName) anchor.tag = String(node.tagName).toLowerCase()
+
+        if (kind === 'pdf') {
+          const pages = queryAll(target.root, '[data-pdf-page]')
+          anchor.pages = pages.length
+          let pageNode = node && typeof node.closest === 'function' ? node.closest('[data-pdf-page]') : null
+          if (!pageNode) pageNode = pageUnder(pages, center.x, center.y)
+          if (pageNode) anchor.page = Number(pageNode.getAttribute('data-pdf-page')) || 0
+          const layer = pageNode ? query(pageNode, '[data-pdf-text]') : null
+          if (layer) {
+            anchor.quote = shrink(joinHits(textHits(layer, box, 'span, br')), QUOTE_MAX)
+          }
+          if (!anchor.quote) anchor.quote = shrink(joinHits(textHits(scope, box, 'span')), QUOTE_MAX)
+          return anchor
+        }
+
+        const lineNodes = queryAll(scope, '[data-textpreview-line]')
+        if (lineNodes.length > 0) {
+          const numbers = []
+          const texts = []
+          for (const line of lineNodes) {
+            if (!intersects(rectOf(line), box)) continue
+            numbers.push(Number(line.getAttribute('data-textpreview-line')) || 0)
+            texts.push(String(line.textContent || ''))
+          }
+          if (numbers.length > 0) {
+            anchor.from = Math.min(...numbers)
+            anchor.to = Math.max(...numbers)
+            anchor.quote = shrink(texts.join(' '), QUOTE_MAX)
+            return anchor
+          }
+        }
+
+        anchor.heading = node ? headingOf(node, scope) : ''
+        anchor.quote = shrink(joinHits(textHits(scope, box, TEXT_SELECTOR)), QUOTE_MAX)
+        return anchor
+      } catch {
+        return anchor
+      }
+    }
+
+    /** Best-effort locator inside a live page: nearest heading and element path. */
+    function pageAnchor(view, viewRect, target) {
+      if (!view || typeof view.executeJavaScript !== 'function' || !target) return Promise.resolve({ selector: '', quote: '' })
+      const x = Math.round(viewRect.left - target.rect.left + Math.min(viewRect.width / 2, 30))
+      const y = Math.round(viewRect.top - target.rect.top + Math.min(viewRect.height / 2, 30))
+      const script = `(() => {
+        try {
+          const node = document.elementFromPoint(${x}, ${y});
+          if (!node) return null;
+          const parts = [];
+          let current = node;
+          for (let depth = 0; current && depth < 4; depth += 1) {
+            const tag = current.tagName ? current.tagName.toLowerCase() : '';
+            if (!tag) break;
+            parts.unshift(current.id ? tag + '#' + current.id : tag);
+            current = current.parentElement;
+          }
+          const heading = node.closest ? node.closest('h1,h2,h3,h4,h5,h6') : null;
+          return {
+            selector: parts.join(' > '),
+            heading: heading && heading.textContent ? heading.textContent.trim().slice(0, 60) : '',
+            quote: (node.innerText || node.textContent || '').replace(/\\s+/g, ' ').trim().slice(0, 120),
+          };
+        } catch (error) { return null; }
+      })()`
+      let pending
+      try { pending = view.executeJavaScript(script) } catch { return Promise.resolve({ selector: '', quote: '' }) }
+      if (!pending || typeof pending.then !== 'function') return Promise.resolve({ selector: '', quote: '' })
+      return pending.then(
+        (value) => (value && typeof value === 'object' ? value : { selector: '', quote: '' }),
+        () => ({ selector: '', quote: '' }),
+      )
+    }
+
+    // ------------------------------------------------------------------ capture
+
+    /** `webview.capturePage()` is promise-based in current Electron, callback-based in old ones. */
+    function capturePage(view) {
+      return new Promise((resolve, reject) => {
+        let settled = false
+        const finish = (image) => {
+          if (settled) return
+          settled = true
+          if (image && typeof image.toDataURL === 'function') resolve(image)
+          else reject(new Error('empty capture'))
+        }
+        const fail = (why) => {
+          if (settled) return
+          settled = true
+          reject(why instanceof Error ? why : new Error(String(why)))
+        }
+        try {
+          const pending = view.capturePage()
+          if (pending && typeof pending.then === 'function') {
+            pending.then(finish, fail)
+            return
+          }
+          if (pending && typeof pending.toDataURL === 'function') {
+            finish(pending)
+            return
+          }
+          view.capturePage(undefined, finish)
+        } catch (cause) {
+          fail(cause)
+        }
+      })
+    }
+
+    function loadImage(src) {
+      return new Promise((resolve, reject) => {
+        const image = new Image()
+        image.onload = () => resolve(image)
+        image.onerror = () => reject(new Error('image'))
+        image.src = src
+      })
+    }
+
+    function canvasOf(width, height) {
+      const canvas = document.createElement('canvas')
+      canvas.width = Math.max(1, Math.round(width))
+      canvas.height = Math.max(1, Math.round(height))
+      const context = canvas.getContext && canvas.getContext('2d')
+      if (!context) throw new Error('canvas')
+      return { canvas, context }
+    }
+
+    function toBlob(canvas) {
+      return new Promise((resolve, reject) => {
+        canvas.toBlob((blob) => { if (blob) resolve(blob); else reject(new Error('crop')) }, 'image/png')
+      })
+    }
+
+    /** Cut one marked box out of the frozen page image, at capture resolution. */
+    async function cropSnapshot(source, box) {
+      const image = await loadImage(source.src)
+      const scale = source.scale > 0 ? source.scale : 1
+      const { canvas, context } = canvasOf(box.w * scale, box.h * scale)
+      const width = canvas.width
+      const height = canvas.height
+      context.drawImage(image,
+        Math.max(0, Math.round(box.x * scale)), Math.max(0, Math.round(box.y * scale)), width, height,
+        0, 0, width, height)
+      return toBlob(canvas)
+    }
+
+    /**
+     * Cut a box out of the page canvas PDF.js painted. The canvas is only
+     * mounted for pages near the viewport, so a box whose page went away just
+     * loses its picture — the locator still identifies the place.
+     */
+    async function cropPdfPage(root, box) {
+      const page = Number(box.anchor && box.anchor.page) || 0
+      if (!page) return null
+      const pageNode = query(root, `[data-pdf-page="${page}"]`)
+      if (!pageNode) return null
+      const canvasNode = query(pageNode, 'canvas')
+      if (!canvasNode) return null
+      const rect = rectOf(pageNode)
+      if (!rect || rect.width <= 0) return null
+      const scale = canvasNode.width / rect.width
+      const left = box.pageX
+      const top = box.pageY
+      if (left === undefined || top === undefined) return null
+      const { canvas, context } = canvasOf(box.w * scale, box.h * scale)
+      context.drawImage(canvasNode,
+        Math.max(0, Math.round(left * scale)), Math.max(0, Math.round(top * scale)), canvas.width, canvas.height,
+        0, 0, canvas.width, canvas.height)
+      return toBlob(canvas)
+    }
+
+    /**
+     * Cut a box out of the image the preview renders. Unlike PDF there is no
+     * page, so the picture itself is the only carrier of detail — and it is
+     * already decoded, so the crop is at its natural resolution.
+     */
+    async function cropImage(target, box, scroll) {
+      const image = query(target.root, '[data-image-preview] img') || query(target.root, 'img')
+      if (!image) return null
+      const rect = rectOf(image)
+      if (!rect || rect.width <= 0) return null
+      const natural = Number(image.naturalWidth) || rect.width
+      const scale = natural / rect.width
+      // The box lives in scroll-content pixels; the image sits in the viewport.
+      const left = target.rect.left + box.x - (scroll ? scroll.x : 0)
+      const top = target.rect.top + box.y - (scroll ? scroll.y : 0)
+      const fromX = Math.max(rect.left, left)
+      const fromY = Math.max(rect.top, top)
+      const toX = Math.min(rect.right, left + box.w)
+      const toY = Math.min(rect.bottom, top + box.h)
+      if (toX - fromX < 1 || toY - fromY < 1) return null
+      const width = (toX - fromX) * scale
+      const height = (toY - fromY) * scale
+      const { canvas, context } = canvasOf(width, height)
+      context.drawImage(image,
+        Math.round((fromX - rect.left) * scale), Math.round((fromY - rect.top) * scale), canvas.width, canvas.height,
+        0, 0, canvas.width, canvas.height)
+      return toBlob(canvas)
+    }
+
+    // ------------------------------------------------------------------- prompt
+
+    function locator(t, box, source) {
+      const anchor = box.anchor || {}
+      const parts = []
+      if (source.kind === 'browser') {
+        if (box.where) parts.push(box.where)
+        if (box.selector) parts.push(t('sbAnchorElement', { tag: shrink(box.selector, LOCATOR_MAX) }))
+        if (box.heading) parts.push(t('sbAnchorHeading', { heading: box.heading }))
+        if (box.quote) parts.push(box.quote)
+        return parts.join(' · ')
+      }
+      if (anchor.page) {
+        parts.push(anchor.pages ? t('sbAnchorPage', { page: anchor.page, total: anchor.pages }) : t('sbAnchorPageSolo', { page: anchor.page }))
+      } else if (anchor.from) {
+        parts.push(anchor.from === anchor.to
+          ? t('sbAnchorLine', { line: anchor.from })
+          : t('sbAnchorLines', { from: anchor.from, to: anchor.to }))
+      } else if (anchor.heading) {
+        parts.push(t('sbAnchorHeading', { heading: anchor.heading }))
+      }
+      // No fallback label: the header already names the file, and "this file"
+      // on every line is noise. An empty locator just leaves the note alone.
+      if (anchor.quote) parts.push(anchor.quote)
+      return parts.join(' · ')
+    }
+
+    function buildPrompt(t, boxes, source) {
+      const count = boxes.length
+      let header
+      if (source.kind === 'browser') {
+        header = source.url ? t('sbPromptHeader', { url: source.url, n: count }) : t('sbPromptNoUrl', { n: count })
+      } else {
+        const path = source.path ? shrink(source.path, 120) : t('sbUntitled')
+        header = source.images ? t('sbPromptDoc', { path, n: count }) : t('sbPromptDocNoImage', { path, n: count })
+      }
+      const lines = boxes.map((box, index) => {
+        const where = locator(t, box, source)
+        const note = box.note && box.note.trim() ? box.note.trim() : t('promptNoNote')
+        return `${index + 1}. ${where ? `${where} · ` : ''}${note}`
+      })
+      return [header, ...lines, '', t('sbPromptCheck')].join('\n')
+    }
+
+    // -------------------------------------------------------------- composer IO
+
+    /** The session whose composer is on screen: the one the main view retains. */
+    function selectMainSession(state) {
+      if (!state || !state.byId) return null
+      const rows = state.byId
+      for (const id of state.ids || Object.keys(rows)) {
+        const row = rows[id]
+        if (row && row.retainedBy && (row.retainedBy.mainView || 0) > 0) return id
+      }
+      return null
+    }
+
+    /**
+     * Write the crops and the prompt into a session's composer through the
+     * conversation service, so no composer component has to be mounted by us.
+     */
+    function makeCommit(ctx) {
+      return async ({ sessionId, files, text }) => {
+        let sessions = null
+        try { sessions = ctx.get('sessions') } catch { sessions = null }
+        if (!sessions) sessions = ctx.sessions
+        if (!sessions || !sessionId) return { ok: false, code: 'unavailable' }
+
+        let binding = null
+        try { binding = sessions.binding(sessionId) } catch { binding = null }
+        if (!binding) return { ok: false, code: 'unavailable' }
+
+        let conversation = null
+        try { conversation = binding.ctx.get('conversation') } catch { conversation = null }
+        if (!conversation) return { ok: false, code: 'unavailable' }
+
+        let ordinary = true
+        try { ordinary = binding.session.getSnapshot().subagent === null } catch { ordinary = true }
+
+        let drafts = []
+        try {
+          drafts = conversation.createDrafts(sessionId, files, ordinary) || []
+        } catch {
+          return { ok: false, code: 'failed' }
+        }
+
+        try {
+          const input = conversation.input.for(binding.ctx)
+          const outcome = conversation.input.requestDraftInitialization(binding, {
+            prompt: text,
+            whenDraftExists: 'append',
+          })
+          if (outcome === 'blocked') {
+            conversation.releaseDraftAttachments(drafts)
+            return { ok: false, code: 'busy' }
+          }
+          const ids = drafts.map((draft) => draft.id)
+          if (!input.addAttachments(ids)) {
+            conversation.releaseDraftAttachments(drafts)
+            return { ok: false, code: 'busy' }
+          }
+          input.focus()
+          return { ok: true }
+        } catch {
+          conversation.releaseDraftAttachments(drafts)
+          return { ok: false, code: 'failed' }
+        }
+      }
+    }
+
+    // ------------------------------------------------------------- the component
+
+    /**
+     * Floating annotator for the sidebar. Browser tabs are frozen into a bitmap
+     * (the webview paints over DOM, so it is hidden while the bitmap is shown);
+     * document previews keep living pixels and get a transparent capture layer,
+     * because their text must stay queryable for the locators.
+     */
+    function SidebarAnnotator(props) {
+      const t = useMemo(() => resolveT(undefined), [])
+      const useSessions = props && props.useSessions
+      const sessionId = typeof useSessions === 'function' ? useSessions(selectMainSession) : null
+      const commit = useMemo(() => makeCommit(props && props.ctx ? props.ctx : {}), [])
+
+      const [anchor, setAnchor] = useState(null)
+      const [shot, setShot] = useState(null)
+      const [boxes, setBoxes] = useState([])
+      const [selected, setSelected] = useState(null)
+      const [dragging, setDragging] = useState(null)
+      const [busy, setBusy] = useState(false)
+      const [error, setError] = useState('')
+      const [scroll, setScroll] = useState({ x: 0, y: 0 })
+
+      const viewRef = useRef(null)
+      const stageRef = useRef(null)
+      const dragRef = useRef(null)
+      const noteRefs = useRef({})
+      const shotRef = useRef(null)
+      const targetRef = useRef(null)
+
+      // Glue the button to the sidebar pane: it can be dragged, resized, or
+      // replaced when another tab takes over.
+      useEffect(() => {
+        let last = ''
+        const sync = () => {
+          const found = findTarget()
+          const key = found
+            ? `${found.kind}:${Math.round(found.rect.left)}:${Math.round(found.rect.top)}:${Math.round(found.rect.width)}:${Math.round(found.rect.height)}`
+            : ''
+          if (key === last) return
+          last = key
+          setAnchor(found
+            ? { kind: found.kind, left: found.rect.left, top: found.rect.top, width: found.rect.width, height: found.rect.height }
+            : null)
+        }
+        sync()
+        const timer = setInterval(sync, 400)
+        window.addEventListener('resize', sync)
+        return () => {
+          clearInterval(timer)
+          window.removeEventListener('resize', sync)
+        }
+      }, [])
+
+      const unfreeze = useCallback(() => {
+        const view = viewRef.current
+        viewRef.current = null
+        if (!view) return
+        try { view.style.visibility = '' } catch { /* frame is gone */ }
+      }, [])
+
+      const cancel = useCallback(() => {
+        unfreeze()
+        shotRef.current = null
+        targetRef.current = null
+        setShot(null)
+        setBoxes([])
+        setSelected(null)
+        setDragging(null)
+        setBusy(false)
+        setError('')
+        setScroll({ x: 0, y: 0 })
+      }, [unfreeze])
+
+      useEffect(() => () => unfreeze(), [unfreeze])
+
+      const openMarkup = useCallback(async () => {
+        const found = findTarget()
+        if (!found) {
+          setError(t('sbNoPage'))
+          return
+        }
+        setError('')
+        setBusy(true)
+        try {
+          const width = Math.max(1, Math.round(found.rect.width))
+          const height = Math.max(1, Math.round(found.rect.height))
+          const left = Math.round(found.rect.left)
+          const top = Math.round(found.rect.top)
+          if (found.kind === 'browser') {
+            if (typeof found.node.capturePage !== 'function') {
+              setError(t('sbNoCapture'))
+              return
+            }
+            const image = await capturePage(found.node)
+            const src = image.toDataURL('image/png')
+            let natural = null
+            try { natural = image.getSize() } catch { natural = null }
+            let url = ''
+            try { url = found.node.getURL() } catch { url = '' }
+            const scale = natural && natural.width > 0 ? natural.width / found.rect.width : 1
+            shotRef.current = { kind: 'browser', src, scale, width, height, url, left, top, left0: found.rect.left, top0: found.rect.top }
+            viewRef.current = found.node
+            try { found.node.style.visibility = 'hidden' } catch { /* not styleable */ }
+            targetRef.current = found
+            setBoxes([])
+            setSelected(null)
+            setScroll({ x: 0, y: 0 })
+            setShot({ mode: 'frozen', src, width, height, left, top })
+          } else {
+            const path = documentPath(found.root)
+            shotRef.current = { kind: 'document', width, height, left, top, path, url: '' }
+            targetRef.current = found
+            const current = scrollOf(found)
+            setBoxes([])
+            setSelected(null)
+            setScroll(current)
+            setShot({
+              mode: 'live',
+              width,
+              height,
+              left,
+              top,
+              path,
+              kind: documentKind(found.root),
+            })
+          }
+        } catch (cause) {
+          unfreeze()
+          setError(t('errShot', { msg: (cause && cause.message) || 'unknown' }))
+        } finally {
+          setBusy(false)
+        }
+      }, [t, unfreeze])
+
+      useEffect(() => {
+        if (!shot) return undefined
+        const onKey = (event) => {
+          if (event.key !== 'Escape') return
+          event.preventDefault()
+          event.stopPropagation()
+          cancel()
+        }
+        window.addEventListener('keydown', onKey, true)
+        return () => window.removeEventListener('keydown', onKey, true)
+      }, [shot, cancel])
+
+      // Documents keep scrolling under the boxes, so the overlay has to follow
+      // the scrollport instead of freezing it.
+      useEffect(() => {
+        const target = targetRef.current
+        if (!shot || shot.mode !== 'live' || !target || !target.scroll) return undefined
+        const node = target.scroll
+        const sync = () => {
+          const next = scrollOf(target)
+          setScroll((previous) => (previous.x === next.x && previous.y === next.y ? previous : next))
+        }
+        sync()
+        node.addEventListener('scroll', sync, { passive: true })
+        return () => node.removeEventListener('scroll', sync)
+      }, [shot])
+
+      const pointIn = (event) => {
+        const stage = stageRef.current
+        if (!stage) return { x: 0, y: 0 }
+        const rect = stage.getBoundingClientRect()
+        return { x: event.clientX - rect.left, y: event.clientY - rect.top }
+      }
+
+      const onPointerDown = (event) => {
+        if (!shot || event.button !== 0) return
+        const point = pointIn(event)
+        dragRef.current = { x: point.x, y: point.y, moved: false }
+        setDragging({ x: point.x, y: point.y, w: 0, h: 0 })
+        try { event.currentTarget.setPointerCapture(event.pointerId) } catch { /* older engines */ }
+      }
+
+      const onPointerMove = (event) => {
+        const start = dragRef.current
+        if (!start) return
+        const rect = normalizeRect(start, pointIn(event))
+        if (!start.moved && (rect.w > 3 || rect.h > 3)) start.moved = true
+        setDragging(rect)
+      }
+
+      const onPointerUp = (event) => {
+        const start = dragRef.current
+        dragRef.current = null
+        setDragging(null)
+        if (!start) return
+        const rect = normalizeRect(start, pointIn(event))
+        if (rect.w < MIN_SIDE || rect.h < MIN_SIDE) {
+          setSelected(null)
+          return
+        }
+        const source = shotRef.current
+        const target = targetRef.current
+        if (!source || !target) return
+        const id = `b${Date.now().toString(36)}${Math.floor(Math.random() * 1000)}`
+
+        if (source.kind === 'browser') {
+          const box = { id, x: rect.x, y: rect.y, w: rect.w, h: rect.h, note: '', anchor: {} }
+          setBoxes((previous) => previous.concat(box))
+          setSelected(id)
+          const viewRect = {
+            left: target.rect.left + rect.x,
+            top: target.rect.top + rect.y,
+            width: rect.w,
+            height: rect.h,
+          }
+          const where = positionWord(t,
+            clamp01((rect.x + rect.w / 2) / Math.max(1, source.width)),
+            clamp01((rect.y + rect.h / 2) / Math.max(1, source.height)))
+          void pageAnchor(target.node, viewRect, target).then((found) => {
+            setBoxes((previous) => previous.map((item) => (item.id === id
+              ? { ...item, where, selector: found.selector, heading: found.heading, quote: found.quote }
+              : item)))
+          })
+        } else {
+          const current = scrollOf(target)
+          const viewRect = {
+            left: target.rect.left + rect.x,
+            top: target.rect.top + rect.y,
+            width: rect.w,
+            height: rect.h,
+          }
+          const found = readAnchor(target, viewRect, '.dwa-freeze, .dwa-float, .dwa-sheet')
+          let pageX
+          let pageY
+          if (found.page) {
+            const pageNode = query(target.root, `[data-pdf-page="${found.page}"]`)
+            const pageRect = pageNode ? rectOf(pageNode) : null
+            if (pageRect) {
+              // Page-local CSS pixels, so the crop still lines up after scroll.
+              pageX = viewRect.left - pageRect.left
+              pageY = viewRect.top - pageRect.top
+            }
+          }
+          setBoxes((previous) => previous.concat({
+            id,
+            x: rect.x + current.x,
+            y: rect.y + current.y,
+            w: rect.w,
+            h: rect.h,
+            pageX,
+            pageY,
+            note: '',
+            anchor: found,
+          }))
+          setSelected(id)
+        }
+
+        setTimeout(() => {
+          const node = noteRefs.current[id]
+          if (node && typeof node.focus === 'function') node.focus()
+        }, 30)
+      }
+
+      const onWheel = (event) => {
+        const target = targetRef.current
+        const node = target && target.scroll
+        if (!node) return
+        if (typeof event.preventDefault === 'function') event.preventDefault()
+        node.scrollTop = Number(node.scrollTop || 0) + Number(event.deltaY || 0)
+        node.scrollLeft = Number(node.scrollLeft || 0) + Number(event.deltaX || 0)
+      }
+
+      const updateNote = (id, note) => {
+        setBoxes((previous) => previous.map((box) => (box.id === id ? { ...box, note } : box)))
+      }
+
+      const removeBox = (id) => {
+        setBoxes((previous) => previous.filter((box) => box.id !== id))
+        setSelected((current) => (current === id ? null : current))
+      }
+
+      const insert = async () => {
+        if (!sessionId) {
+          setError(t('sbNeedSession'))
+          return
+        }
+        const source = shotRef.current
+        const target = targetRef.current
+        if (!source || !target || boxes.length === 0) return
+        setError('')
+        setBusy(true)
+        try {
+          const files = []
+          const renderer = documentKind(target.root)
+          for (let index = 0; index < boxes.length; index += 1) {
+            let blob = null
+            if (source.kind === 'browser') {
+              blob = await cropSnapshot(source, boxes[index])
+            } else if (boxes[index].anchor && boxes[index].anchor.page) {
+              blob = await cropPdfPage(target.root, boxes[index])
+            } else if (renderer === 'image') {
+              blob = await cropImage(target, boxes[index], scrollOf(target))
+            }
+            if (blob) files.push(new File([blob], `page-${index + 1}-${stamp()}.png`, { type: 'image/png' }))
+          }
+          const text = buildPrompt(t, boxes, {
+            kind: source.kind,
+            url: source.url || '',
+            path: source.path || '',
+            images: files.length > 0,
+          })
+          const result = await commit({ sessionId, files, text })
+          if (!result || result.ok !== true) {
+            setError(result && result.code === 'busy' ? t('errBusy') : t('errUnavailable'))
+            setBusy(false)
+            return
+          }
+          cancel()
+        } catch (cause) {
+          setError(t('errCrop', { msg: (cause && cause.message) || 'unknown' }))
+          setBusy(false)
+        }
+      }
+
+      const selectedBox = selected ? boxes.find((box) => box.id === selected) ?? null : null
+
+      if (!shot) {
+        return el(React.Fragment, null,
+          el('style', null, CSS),
+          anchor
+            ? el('button', {
+              type: 'button',
+              className: 'dwa-float',
+              title: t('sbButtonHint'),
+              style: {
+                left: `${Math.max(8, Math.round(anchor.left + anchor.width) - 118)}px`,
+                top: `${Math.round(anchor.top) + 10}px`,
+              },
+              onPointerDown: (event) => event.stopPropagation(),
+              onClick: () => { void openMarkup() },
+            }, el(FrameIcon), t(anchor.kind === 'browser' ? 'sbButtonPage' : 'sbButtonDoc'))
+            : null,
+          error && anchor
+            ? el('div', {
+              className: 'dwa-sb-toast',
+              style: {
+                left: `${Math.max(8, Math.round(anchor.left + anchor.width) - 268)}px`,
+                top: `${Math.round(anchor.top) + 46}px`,
+              },
+            }, error)
+            : null)
+      }
+
+      const total = boxes.length
+      const anchorLine = selectedBox
+        ? el('div', { className: 'dwa-anchor' },
+          el('b', null, locator(t, selectedBox, { kind: shot.mode === 'frozen' ? 'browser' : 'document' }) || t('sbAnchorFile')))
+        : null
+
+      // Where the editor can live: beside the pane when the layout leaves room,
+      // otherwise docked inside its bottom-right corner.
+      const room = Math.round(shot.left) - 20
+      const beside = room >= 240
+      const sheetWidth = Math.min(320, Math.max(220, room - 12))
+
+      // The note editor only appears once a region exists, and it never sits on
+      // top of the picture while a new region is being dragged out.
+      const sheetParts = total === 0 || (dragging && !beside)
+        ? null
+        : [
+          el('div', { className: 'dwa-sheet-bar' },
+            boxes.map((box, index) => el('button', {
+              key: box.id,
+              type: 'button',
+              className: 'dwa-chip',
+              'data-selected': selected === box.id ? '1' : '0',
+              onClick: () => setSelected(box.id),
+            }, String(index + 1))),
+            el('span', { className: 'dwa-sheet-hint' }, selectedBox ? t('sbHelp') : t('sbPickHint')),
+            el('button', { type: 'button', className: 'dwa-x', title: t('close'), onClick: cancel }, '✕')),
+          selectedBox ? anchorLine : null,
+          selectedBox
+            ? el('textarea', {
+              ref: (node) => {
+                if (node) noteRefs.current[selectedBox.id] = node
+                else delete noteRefs.current[selectedBox.id]
+              },
+              value: selectedBox.note,
+              placeholder: t('notePlaceholder'),
+              onChange: (event) => updateNote(selectedBox.id, event.target.value),
+            })
+            : null,
+          el('div', { className: 'dwa-sheet-foot' },
+            selectedBox
+              ? el('button', { type: 'button', className: 'dwa-btn', onClick: () => removeBox(selectedBox.id) }, t('remove'))
+              : null,
+            el('span', { className: 'dwa-sheet-gap' }),
+            el('button', {
+              type: 'button',
+              className: 'dwa-btn dwa-btn-primary',
+              disabled: busy || boxes.length === 0,
+              onClick: () => { void insert() },
+            }, busy ? t('sbInserting') : t('insert'))),
+          error ? el('div', { className: 'dwa-error' }, error) : null,
+        ]
+
+      const live = shot.mode === 'live'
+      const frameStyle = {
+        left: `${shot.left}px`,
+        top: `${shot.top}px`,
+        width: `${shot.width}px`,
+        height: `${shot.height}px`,
+      }
+      const stage = el('div', {
+        ref: stageRef,
+        className: 'dwa-stage',
+        onPointerDown,
+        onPointerMove,
+        onPointerUp,
+        onPointerCancel: () => { dragRef.current = null; setDragging(null) },
+        onWheel,
+      },
+        live ? null : el('img', { src: shot.src, alt: '', draggable: false }),
+        boxes.map((box, index) => el('div', {
+          key: box.id,
+          className: 'dwa-sb-box',
+          'data-selected': selected === box.id ? '1' : '0',
+          style: {
+            left: `${((live ? box.x - scroll.x : box.x) / Math.max(1, shot.width)) * 100}%`,
+            top: `${((live ? box.y - scroll.y : box.y) / Math.max(1, shot.height)) * 100}%`,
+            width: `${(box.w / Math.max(1, shot.width)) * 100}%`,
+            height: `${(box.h / Math.max(1, shot.height)) * 100}%`,
+          },
+          onPointerDown: (event) => event.stopPropagation(),
+          onClick: (event) => { event.stopPropagation(); setSelected(box.id) },
+        }, el('div', { className: 'dwa-sb-n' }, String(index + 1)))),
+        dragging
+          ? el('div', {
+            className: 'dwa-sb-ghost',
+            style: {
+              left: `${(dragging.x / Math.max(1, shot.width)) * 100}%`,
+              top: `${(dragging.y / Math.max(1, shot.height)) * 100}%`,
+              width: `${(dragging.w / Math.max(1, shot.width)) * 100}%`,
+              height: `${(dragging.h / Math.max(1, shot.height)) * 100}%`,
+            },
+          })
+          : null)
+
+      const tip = total === 0 && !dragging
+        ? el('div', { className: 'dwa-tip' }, t('sbTip'))
+        : null
+
+      // Park the editor beside the pane when there is room (over the chat
+      // column), so it never covers the area still being boxed.
+      const sheetStyle = beside
+        ? { left: `${Math.round(shot.left) - sheetWidth - 12}px`, top: `${Math.round(shot.top) + 10}px`, width: `${sheetWidth}px` }
+        : {
+          left: `${Math.max(8, Math.round(shot.left + shot.width) - sheetWidth - 12)}px`,
+          top: `${Math.max(8, Math.round(shot.top + shot.height) - 190)}px`,
+          width: `${sheetWidth}px`,
+        }
+
+      const surface = el('div', { className: 'dwa-freeze', 'data-mode': shot.mode, style: frameStyle }, stage, tip)
+
+      const sheet = sheetParts
+        ? el('div', { className: 'dwa-sheet', 'data-compact': selectedBox ? '0' : '1', style: sheetStyle }, sheetParts)
+        : null
+
+      return createPortal(el(React.Fragment, null, el('style', null, CSS), surface, sheet), document.body)
+    }
+
+    return {
+      name: 'web-annotate',
+      inject: ['slots'],
+      apply(ctx) {
+        // `shell.overlay` is the frame-wide, click-through layer owned by the
+        // shell; the annotator lives there and follows the sidebar pane.
+        ctx.slots.inject('shell.overlay', () => ctx.slots.register({
+          name: 'shell.overlay',
+          id: 'web-annotate.page',
+          order: 60,
+          label: 'Annotate page',
+        }, (props) => el(SidebarAnnotator, { useSessions: props.useSessions, ctx })))
+      },
+    }
+  },
+})

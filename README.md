@@ -159,6 +159,41 @@ node test/smoke.mjs
 
 改动后自检顺序：`node --check client.js` → `node test/smoke.mjs` → 用 `plugin_manager` 重装（或 `set_bundle` 关再开）→ 刷新界面肉眼确认。
 
+## English
+
+Box a region on a page opened in the DeepSeek Harness (DSH) sidebar, or on a
+PDF / Markdown / txt / code / image preview, write one short note per region,
+and insert the crops plus a prompt into the composer. Each line of the prompt
+carries a locator taken from the preview itself — page number and quoted text
+for PDFs, a line range for plain text, the nearest heading for Markdown — so
+the model can find the spot in a long document instead of guessing.
+
+**Install** (DSH keeps plugins as *bundles* installed from a directory, not
+from a package name):
+
+```bash
+git clone https://github.com/wuwen1994/dsh-web-annotate.git ~/dsh-plugins/dsh-web-annotate
+```
+
+Then ask the DSH agent to install that folder, i.e. call
+`plugin_manager({ action: "install_bundle", target: "<absolute path to the folder>" })`.
+Success looks like `{"stage":"enable","application":"applied","warnings":[]}`.
+Refresh the window afterwards. To update: `git pull`, then
+`remove_bundle` + `install_bundle` when `index.js` or the version changed.
+To remove: `plugin_manager({ action: "remove_bundle", target: "dsh-web-annotate" })`.
+
+**Requirements**: annotating a *web page* needs the DSH desktop (Electron)
+build, because it reads pixels through the sidebar `<webview>` and its
+`capturePage()`. Annotating a *file preview* works in both builds. No extra
+dependencies, no local Chrome.
+
+**Limits**: only the visible area can be marked (the page becomes a bitmap);
+hover / double-click / file-drop into the page are not forwarded; Excel previews
+get notes but no crops.
+
+**Tests**: `node test/smoke.mjs` — runs the client through a tiny fake DOM, no
+DSH and no browser needed.
+
 ## License
 
 MIT，见 [LICENSE](LICENSE)。

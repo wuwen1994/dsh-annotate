@@ -1,0 +1,3 @@
+- insert:
+    - id: web-annotate
+      name: 'dsh-web-annotate'

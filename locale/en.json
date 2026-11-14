@@ -1,0 +1,7 @@
+{
+  "meta": {
+    "title": "Page notes",
+    "description": "Box regions on a page or a file (PDF, Markdown, txt) previewed in the DSH sidebar, write notes, and drop crops plus a prompt anchored by page and line numbers into the composer.",
+    "detail": "docs/DETAIL.md"
+  }
+}

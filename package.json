@@ -1,0 +1,53 @@
+{
+  "name": "dsh-web-annotate",
+  "version": "0.7.3",
+  "private": true,
+  "type": "module",
+  "description": "Annotate regions on a web page or a file preview (PDF, Markdown, txt, code, image) in the DeepSeek Harness sidebar and send crops plus a located prompt to the composer.",
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js",
+    "./locale/*.json": "./locale/*.json",
+    "./icon": "./icon.svg"
+  },
+  "files": [
+    "index.js",
+    "client.js",
+    "cordis.patch.yml",
+    "locale/*.json",
+    "docs",
+    "icon.svg"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "immediately": true,
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-session",
+        "@deepseek-ai/dsh-client-ui-conversation"
+      ]
+    }
+  },
+  "license": "MIT",
+  "author": "wuwen1994",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/wuwen1994/dsh-web-annotate.git"
+  },
+  "homepage": "https://github.com/wuwen1994/dsh-web-annotate#readme",
+  "bugs": {
+    "url": "https://github.com/wuwen1994/dsh-web-annotate/issues"
+  },
+  "keywords": [
+    "dsh",
+    "deepseek-harness",
+    "plugin",
+    "bundle",
+    "annotation",
+    "screenshot",
+    "pdf"
+  ]
+}
