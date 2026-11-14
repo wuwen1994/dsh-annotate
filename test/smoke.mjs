@@ -656,6 +656,14 @@ async function scenarioPage() {
     assert.match(log.inits[0].prompt, /提交订单/, 'the heading anchor went missing')
     assert.ok(!log.inits[0].prompt.includes('div#app'), 'the element path leaked into the prompt')
     assert.ok(!log.inits[0].prompt.includes('> 区域'), 'the element path leaked into the prompt')
+    // The position word comes from the dictionary; a wrong key used to leak the
+    // raw id ("posLc") straight into the prompt.
+    assert.ok(!/pos[A-Za-z]/.test(log.inits[0].prompt), `a raw position key leaked: ${log.inits[0].prompt}`)
+    assert.match(
+      log.inits[0].prompt,
+      /左上|上方居中|右上|左侧居中|页面中部|右侧居中|左下|下方居中|右下/,
+      `no position word in the line: ${log.inits[0].prompt}`,
+    )
     assert.deepEqual(log.attachments, [['draft-0-0']])
     assert.equal(log.released.length, 0)
   })

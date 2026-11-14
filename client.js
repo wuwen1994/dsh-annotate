@@ -103,10 +103,17 @@ window.__ModuleLoader__.load({
 
     const clamp01 = (value) => Math.min(1, Math.max(0, value))
 
+    // Where the box sits, in words. The dictionary names the middle band "m"
+    // (posLm / posCm / posRm) while the row is picked as "c" here, hence the map.
+    const POSITION_ROW = { t: 't', c: 'm', b: 'b' }
+
     function positionWord(t, cx, cy) {
       const row = cy < 0.34 ? 't' : cy < 0.67 ? 'c' : 'b'
       const col = cx < 0.34 ? 'l' : cx < 0.67 ? 'c' : 'r'
-      return t(`pos${col.toUpperCase()}${row}`)
+      const key = `pos${col.toUpperCase()}${POSITION_ROW[row]}`
+      const word = t(key)
+      // A missing entry comes back as the key itself; never let that reach the prompt.
+      return word === key ? '' : word
     }
 
     function normalizeRect(start, end) {
