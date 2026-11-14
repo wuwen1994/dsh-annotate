@@ -1,5 +1,5 @@
 /**
- * Client half of the web-annotate bundle.
+ * Client half of the annotate bundle.
  *
  * A floating button rides on top of whatever the built-in right sidebar shows:
  * the sandboxed browser tab (an Electron <webview>) or the document preview
@@ -9,14 +9,14 @@
  * range, heading, quoted text) — into the composer.
  */
 window.__ModuleLoader__.load({
-  id: 'dsh-web-annotate',
+  id: 'dsh-annotate',
   factory(require) {
     const React = require('react')
     const { createPortal } = require('react-dom')
     const { useState, useRef, useEffect, useCallback, useMemo } = React
     const el = (tag, props, ...children) => React.createElement(tag, props, ...children)
 
-    const NS = 'webAnnotate'
+    const NS = 'annotate'
     const MIN_SIDE = 6
     const QUOTE_MAX = 180
     const LOCATOR_MAX = 120
@@ -37,10 +37,8 @@ window.__ModuleLoader__.load({
       sbButtonPage: '标注页面',
       sbButtonDoc: '标注文档',
       sbButtonHint: '截取右侧栏当前的画面，圈出区域写批注',
-      sbHelp: '拖动圈选 · 点编号写批注 · Esc 取消',
       sbEmpty: '在画面上拖出一个方框，再写批注。',
       sbTip: '在画面上拖出要标注的区域',
-      sbPickHint: '点编号写批注，或继续框选新区域',
       sbNeedSession: '先在左侧选一个会话，批注才能插进输入框。',
       sbNoPage: '右侧栏里还没有打开的网页或文件。',
       sbNoCapture: '当前环境不支持网页截图。',
@@ -76,10 +74,8 @@ window.__ModuleLoader__.load({
       sbButtonPage: 'Annotate page',
       sbButtonDoc: 'Annotate file',
       sbButtonHint: 'Capture what the sidebar shows, box the regions and write notes',
-      sbHelp: 'Drag to box · click a number to write · Esc to cancel',
       sbEmpty: 'Drag a box on the picture, then write a note.',
       sbTip: 'Drag out the region you want to annotate',
-      sbPickHint: 'Click a number to write, or box another region',
       sbNeedSession: 'Pick a session on the left so the notes have a composer to land in.',
       sbNoPage: 'The sidebar is not showing a page or a file.',
       sbNoCapture: 'This environment cannot capture the page.',
@@ -168,10 +164,9 @@ window.__ModuleLoader__.load({
       .dwa-btn { display: inline-flex; align-items: center; gap: 6px; padding: 6px 12px; font: inherit; font-size: 13px; cursor: pointer;
         color: var(--dsw-alias-label-primary, #111); background: transparent; border: 1px solid var(--dsw-alias-border-l2, rgba(0,0,0,.14));
         border-radius: var(--dsw-radius-sm, 6px); white-space: nowrap; }
-      .dwa-btn:hover { background: var(--dsw-alias-interactive-bg-hover, rgba(127,127,127,.12)); }
+      .dwa-btn:not(.dwa-btn-primary):hover { background: var(--dsw-alias-interactive-bg-hover, rgba(127,127,127,.12)); }
       .dwa-btn[disabled] { opacity: .5; cursor: default; }
       .dwa-btn-primary { color: #fff; background: var(--dsw-alias-brand-primary, #3b82f6); border-color: transparent; }
-      .dwa-btn-primary:hover { filter: brightness(1.06); }
       .dwa-error { color: #e5484d; font-size: 12px; }
 
       /* Floating "annotate" button over whatever the sidebar shows. */
@@ -193,6 +188,8 @@ window.__ModuleLoader__.load({
       .dwa-sb-n { position: absolute; top: -10px; left: -10px; min-width: 18px; height: 18px; padding: 0 5px; border-radius: 999px;
         background: #e5484d; color: #fff; font-size: 11px; font-weight: 600; line-height: 18px; text-align: center; }
       .dwa-sb-box[data-selected='1'] .dwa-sb-n { background: #2f6fed; }
+      .dwa-sb-del { position: absolute; top: -10px; right: -10px; width: 18px; height: 18px; padding: 0; border: none; border-radius: 999px;
+        background: #2f6fed; color: #fff; font: inherit; font-size: 11px; line-height: 18px; text-align: center; cursor: pointer; }
       .dwa-sb-ghost { position: absolute; border: 1px dashed #e5484d; background: rgba(229,72,77,.1); }
 
       .dwa-sheet { position: fixed; z-index: 1401; width: min(320px, calc(100vw - 24px)); max-height: calc(100vh - 20px); overflow-y: auto; display: flex; flex-direction: column; gap: 6px;
@@ -206,7 +203,6 @@ window.__ModuleLoader__.load({
       .dwa-chip { min-width: 22px; height: 22px; padding: 0 6px; border-radius: 999px; border: 1px solid var(--dsw-alias-border-l2, rgba(0,0,0,.14));
         background: transparent; color: var(--dsw-alias-label-secondary, #4a4f57); font: inherit; font-size: 12px; cursor: pointer; }
       .dwa-chip[data-selected='1'] { background: var(--dsw-alias-brand-primary, #2f6fed); border-color: transparent; color: #fff; }
-      .dwa-sheet-hint { flex: 1; min-width: 80px; font-size: 11px; color: var(--dsw-alias-label-tertiary, #8a8f98); }
       .dwa-anchor { font-size: 11px; line-height: 1.45; color: var(--dsw-alias-label-tertiary, #8a8f98); }
       .dwa-anchor b { font-weight: 600; color: var(--dsw-alias-label-secondary, #4a4f57); }
       .dwa-anchor q { quotes: '「' '」'; color: var(--dsw-alias-label-secondary, #4a4f57); }
@@ -593,12 +589,13 @@ window.__ModuleLoader__.load({
 
     // ------------------------------------------------------------------- prompt
 
-    function locator(t, box, source) {
+    function locator(t, box, source, options) {
       const anchor = box.anchor || {}
+      const withElement = !options || options.element !== false
       const parts = []
       if (source.kind === 'browser') {
         if (box.where) parts.push(box.where)
-        if (box.selector) parts.push(t('sbAnchorElement', { tag: shrink(box.selector, LOCATOR_MAX) }))
+        if (withElement && box.selector) parts.push(t('sbAnchorElement', { tag: shrink(box.selector, LOCATOR_MAX) }))
         if (box.heading) parts.push(t('sbAnchorHeading', { heading: box.heading }))
         if (box.quote) parts.push(box.quote)
         return parts.join(' · ')
@@ -628,7 +625,10 @@ window.__ModuleLoader__.load({
         header = source.images ? t('sbPromptDoc', { path, n: count }) : t('sbPromptDocNoImage', { path, n: count })
       }
       const lines = boxes.map((box, index) => {
-        const where = locator(t, box, source)
+        // The element path is a debugging aid, not something worth showing to
+        // the model (or the user): the position word plus the quoted text is
+        // what actually locates a region on a page.
+        const where = locator(t, box, source, { element: false })
         const note = box.note && box.note.trim() ? box.note.trim() : t('promptNoNote')
         return `${index + 1}. ${where ? `${where} · ` : ''}${note}`
       })
@@ -1052,7 +1052,7 @@ window.__ModuleLoader__.load({
       const total = boxes.length
       const anchorLine = selectedBox
         ? el('div', { className: 'dwa-anchor' },
-          el('b', null, locator(t, selectedBox, { kind: shot.mode === 'frozen' ? 'browser' : 'document' }) || t('sbAnchorFile')))
+          el('b', null, locator(t, selectedBox, { kind: shot.mode === 'frozen' ? 'browser' : 'document' }, { element: false }) || t('sbAnchorFile')))
         : null
 
       const live = shot.mode === 'live'
@@ -1103,7 +1103,6 @@ window.__ModuleLoader__.load({
               'data-selected': selected === box.id ? '1' : '0',
               onClick: () => setSelected(box.id),
             }, String(index + 1))),
-            el('span', { className: 'dwa-sheet-hint' }, selectedBox ? t('sbHelp') : t('sbPickHint')),
             el('button', { type: 'button', className: 'dwa-x', title: t('close'), onClick: cancel }, '✕')),
           selectedBox ? anchorLine : null,
           selectedBox
@@ -1118,9 +1117,6 @@ window.__ModuleLoader__.load({
             })
             : null,
           el('div', { className: 'dwa-sheet-foot' },
-            selectedBox
-              ? el('button', { type: 'button', className: 'dwa-btn', onClick: () => removeBox(selectedBox.id) }, t('remove'))
-              : null,
             el('span', { className: 'dwa-sheet-gap' }),
             el('button', {
               type: 'button',
@@ -1159,7 +1155,17 @@ window.__ModuleLoader__.load({
           },
           onPointerDown: (event) => event.stopPropagation(),
           onClick: (event) => { event.stopPropagation(); setSelected(box.id) },
-        }, el('div', { className: 'dwa-sb-n' }, String(index + 1)))),
+        },
+        el('div', { className: 'dwa-sb-n' }, String(index + 1)),
+        selected === box.id
+          ? el('button', {
+            type: 'button',
+            className: 'dwa-sb-del',
+            title: t('remove'),
+            onPointerDown: (event) => event.stopPropagation(),
+            onClick: (event) => { event.stopPropagation(); removeBox(box.id) },
+          }, '✕')
+          : null)),
         dragging
           ? el('div', {
             className: 'dwa-sb-ghost',
@@ -1193,16 +1199,16 @@ window.__ModuleLoader__.load({
     }
 
     return {
-      name: 'web-annotate',
+      name: 'annotate',
       inject: ['slots'],
       apply(ctx) {
         // `shell.overlay` is the frame-wide, click-through layer owned by the
         // shell; the annotator lives there and follows the sidebar pane.
         ctx.slots.inject('shell.overlay', () => ctx.slots.register({
           name: 'shell.overlay',
-          id: 'web-annotate.page',
+          id: 'annotate.page',
           order: 60,
-          label: 'Annotate page',
+          label: 'Annotate',
         }, (props) => el(SidebarAnnotator, { useSessions: props.useSessions, ctx })))
       },
     }

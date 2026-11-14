@@ -1,9 +1,9 @@
 {
-  "name": "dsh-web-annotate",
-  "version": "0.7.4",
+  "name": "dsh-annotate",
+  "version": "0.8.0",
   "private": true,
   "type": "module",
-  "description": "Annotate regions on a web page or a file preview (PDF, Markdown, txt, code, image) in the DeepSeek Harness sidebar and send crops plus a located prompt to the composer.",
+  "description": "Annotate regions on whatever the DeepSeek Harness sidebar is showing — a web page, PDF, Markdown, txt, code or image — and send crops plus a located prompt to the composer.",
   "exports": {
     ".": "./index.js",
     "./client": "./client.js",
@@ -35,11 +35,11 @@
   "author": "wuwen1994",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/wuwen1994/dsh-web-annotate.git"
+    "url": "git+https://github.com/wuwen1994/dsh-annotate.git"
   },
-  "homepage": "https://github.com/wuwen1994/dsh-web-annotate#readme",
+  "homepage": "https://github.com/wuwen1994/dsh-annotate#readme",
   "bugs": {
-    "url": "https://github.com/wuwen1994/dsh-web-annotate/issues"
+    "url": "https://github.com/wuwen1994/dsh-annotate/issues"
   },
   "keywords": [
     "dsh",

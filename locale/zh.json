@@ -1,7 +1,7 @@
 {
   "meta": {
-    "title": "网页标注",
-    "description": "在 DSH 右侧栏的网页或文件（PDF/Markdown/txt）上圈出区域、写批注，一键变成带页码/行号定位的截图 + 提示词放进输入框。",
+    "title": "侧栏标注",
+    "description": "在 DSH 右侧栏当前显示的内容上圈出区域、写批注——网页、PDF、Word/PPT、Markdown、txt、代码、图片都可以——一键变成带页码/行号定位的截图 + 提示词放进输入框。",
     "detail": "docs/DETAIL.md"
   }
 }

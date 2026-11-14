@@ -1,3 +1,3 @@
 - insert:
-    - id: web-annotate
-      name: 'dsh-web-annotate'
+    - id: annotate
+      name: 'dsh-annotate'

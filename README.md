@@ -1,4 +1,4 @@
-# dsh-web-annotate
+# dsh-annotate
 
 在 DeepSeek Harness（DSH）右侧栏的**网页**或**文件预览**上圈出一块，写一句批注，直接把「裁剪图 + 带定位的提示词」放进输入框。
 
@@ -13,7 +13,7 @@ DSH 的右侧栏可以直接打开网页，也能预览 PDF、Markdown、txt、�
 这个插件做两件事：
 
 1. **让你框**：在右侧栏画面上拖出任意多个框，每个框写一句批注。
-2. **让模型对上号**：插入时除了裁剪图，还会自动带上定位信息——PDF 的页码 + 框内文字，纯文本的行号区间 + 框内文字，Markdown 的最近小标题，网页的元素路径 / 标题 / 前 120 字。
+2. **让模型对上号**：插入时除了裁剪图，还会自动带上定位信息——PDF 的页码 + 框内文字，纯文本的行号区间 + 框内文字，Markdown 的最近小标题，网页的方位 / 最近标题 / 前 120 字。
 
 插入结果示例：
 
@@ -51,19 +51,19 @@ DSH 的插件以「bundle」为单位安装，安装源就是这个仓库的**�
 1. 把仓库克隆到本地任意位置（建议放在不会被清理的目录）：
 
    ```bash
-   git clone https://github.com/wuwen1994/dsh-web-annotate.git ~/dsh-plugins/dsh-web-annotate
+   git clone https://github.com/wuwen1994/dsh-annotate.git ~/dsh-plugins/dsh-annotate
    ```
 
 2. 在 DSH 会话里让助手安装这个目录（或者在插件管理器里选择「从本地目录安装」）：
 
-   > 用 plugin_manager install_bundle 安装 `~/dsh-plugins/dsh-web-annotate` 的绝对路径
+   > 用 plugin_manager install_bundle 安装 `~/dsh-plugins/dsh-annotate` 的绝对路径
 
    助手会调用 `plugin_manager({ action: "install_bundle", target: "<绝对路径>" })`。target 必须是**包的根目录**（里面直接有 `package.json`）。
 
 3. 看安装结果，不要看日志：
 
    ```json
-   { "stage": "enable", "enabled": true, "application": "applied", "version": "0.7.3", "warnings": [] }
+   { "stage": "enable", "enabled": true, "application": "applied", "version": "0.8.0", "warnings": [] }
    ```
 
    `application: "applied"` 且 `warnings` 为空，才算装上了。若是 `"failed"`，把返回里的错误行贴出来再排查。
@@ -73,7 +73,7 @@ DSH 的插件以「bundle」为单位安装，安装源就是这个仓库的**�
 ### 更新
 
 ```bash
-cd ~/dsh-plugins/dsh-web-annotate && git pull
+cd ~/dsh-plugins/dsh-annotate && git pull
 ```
 
 改动了 `client.js` 这类纯前端文件，刷新界面即可生效；改动了 `index.js`（Host 半）或 `package.json` 版本号，需要重新装一次：
@@ -82,7 +82,7 @@ cd ~/dsh-plugins/dsh-web-annotate && git pull
 
 ### 卸载
 
-> 用 plugin_manager remove_bundle 卸载 dsh-web-annotate
+> 用 plugin_manager remove_bundle 卸载 dsh-annotate
 
 ### 不要这样做
 
@@ -99,7 +99,7 @@ cd ~/dsh-plugins/dsh-web-annotate && git pull
 4. 在卡片里选中编号，写批注；卡片上方会实时显示这一框的定位（`第 12/40 页`、`第 140–152 行`、`小标题 · 框内文字…`）。
 5. 点「插入输入框」，草稿里出现裁剪图和编号说明。检查一下，照常发送。
 
-快捷键：`Esc` 关闭标注；点空白处取消选中；框上的编号可以直接点。
+快捷键与操作：`Esc` 关闭标注；点空白处取消选中；框上的编号可以直接点；选中某个框后，框右上角的 `✕` 删掉这一个框（卡片右上角的 `✕` 是关掉整个标注）。
 
 ## 定位是怎么算出来的
 
@@ -109,7 +109,7 @@ cd ~/dsh-plugins/dsh-web-annotate && git pull
 | 纯文本 / 代码 | `[data-textpreview-line="N"]` 的行号区间 + 相交行文字 | `第 140–152 行 · “框内文字”` |
 | Markdown | 最近的标题 + 相交叶子元素的文字 | `“小节标题” · “框内文字”` |
 | 图片 | 无文字锚点 | 只有批注（不重复写文件名） |
-| 网页 | `executeJavaScript` 尽力取元素路径、最近的 `h1`–`h6`、`innerText` 前 120 字 | `左上 · <div#app > button> 区域 · “…”` |
+| 网页 | `executeJavaScript` 尽力取最近的 `h1`–`h6`、`innerText` 前 120 字 | `左上 · “…”` |
 
 定位是**线索**，不是保证：PDF 的文字层可能缺字，Markdown 没有行号。所以提示词末尾固定加一句，让模型以引号里的文字为准去文件里定位。这句话是刻意加的，别删。
 
@@ -172,7 +172,7 @@ the model can find the spot in a long document instead of guessing.
 from a package name):
 
 ```bash
-git clone https://github.com/wuwen1994/dsh-web-annotate.git ~/dsh-plugins/dsh-web-annotate
+git clone https://github.com/wuwen1994/dsh-annotate.git ~/dsh-plugins/dsh-annotate
 ```
 
 Then ask the DSH agent to install that folder, i.e. call
@@ -180,7 +180,7 @@ Then ask the DSH agent to install that folder, i.e. call
 Success looks like `{"stage":"enable","application":"applied","warnings":[]}`.
 Refresh the window afterwards. To update: `git pull`, then
 `remove_bundle` + `install_bundle` when `index.js` or the version changed.
-To remove: `plugin_manager({ action: "remove_bundle", target: "dsh-web-annotate" })`.
+To remove: `plugin_manager({ action: "remove_bundle", target: "dsh-annotate" })`.
 
 **Requirements**: annotating a *web page* needs the DSH desktop (Electron)
 build, because it reads pixels through the sidebar `<webview>` and its

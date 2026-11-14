@@ -1,4 +1,4 @@
-// Headless smoke test for the web-annotate client half.
+// Headless smoke test for the annotate client half.
 //
 // Mounts the module with a tiny hooks runtime and a tiny fake DOM so the real
 // component code runs without a browser. Three scenarios:
@@ -334,7 +334,7 @@ function loadModule(runtime) {
   // eslint-disable-next-line no-new-func
   new Function('window', 'globalThis', source)(globalThis.window, globalThis)
   assert.ok(captured, 'client.js did not register with __ModuleLoader__')
-  assert.equal(captured.id, 'dsh-web-annotate')
+  assert.equal(captured.id, 'dsh-annotate')
   const require = (name) => {
     if (name === 'react') return runtime.React
     if (name === 'react-dom') return runtime.reactDom
@@ -357,6 +357,14 @@ function find(node, predicate) {
     if (!hit && candidate.type && predicate(candidate)) hit = candidate
   })
   return hit
+}
+
+function findAll(node, predicate) {
+  const hits = []
+  walk(node, (candidate) => {
+    if (candidate.type && predicate(candidate)) hits.push(candidate)
+  })
+  return hits
 }
 
 function textOf(node) {
@@ -451,6 +459,13 @@ async function scenarioPage() {
     return Promise.resolve({ toDataURL: () => 'data:image/png;base64,AAAA', getSize: () => ({ width: 840, height: 600 }) })
   }
   webview.getURL = () => 'http://127.0.0.1:8799/third'
+  // The plugin asks the page for a best-effort locator; the element path it
+  // returns is for our own eyes and must never reach the prompt.
+  webview.executeJavaScript = () => Promise.resolve({
+    selector: 'div#app > form > button',
+    heading: '提交订单',
+    quote: '提交订单',
+  })
   globalThis.document = fakeDocument([webview], canvasLog)
   globalThis.Image = FakeImage
 
@@ -466,7 +481,7 @@ async function scenarioPage() {
 
   check('page: only the overlay is registered', () => {
     assert.deepEqual(Object.keys(ctx.slots.registry), ['shell.overlay'])
-    assert.equal(ctx.slots.registry['shell.overlay'].options.id, 'web-annotate.page')
+    assert.equal(ctx.slots.registry['shell.overlay'].options.id, 'annotate.page')
   })
 
   floatButton.props.onClick()
@@ -544,6 +559,17 @@ async function scenarioPage() {
     assert.equal(chip.props['data-selected'], '1')
   })
 
+  check('page: the card keeps only chips, a delete badge and a close button', () => {
+    assert.ok(!find(scene.tree, (node) => node.props?.className === 'dwa-sheet-hint'), 'the hint line came back')
+    assert.ok(find(scene.tree, (node) => node.props?.className === 'dwa-sheet-bar'), 'no card bar')
+    assert.ok(find(scene.tree, (node) => node.props?.className === 'dwa-x'), 'no close button')
+    const badges = findAll(scene.tree, (node) => node.props?.className === 'dwa-sb-del')
+    assert.equal(badges.length, 1, 'exactly the selected region should offer a delete badge')
+    const removeButtons = findAll(scene.tree, (node) => node.type === 'button' && textOf(node) === '删除')
+    assert.equal(removeButtons.length, 0, 'the bottom-left remove button is back')
+    assert.ok(!source.includes('brightness('), 'the primary button still has a hover filter')
+  })
+
   const note = find(scene.tree, (node) => node.type === 'textarea')
   note.props.onChange({ target: { value: '这个按钮在右键菜单里点不到' } })
   await runtime.flush()
@@ -567,13 +593,16 @@ async function scenarioPage() {
     assert.equal(log.inits[0].whenDraftExists, 'append')
     assert.match(log.inits[0].prompt, /我在页面 http:\/\/127\.0\.0\.1:8799\/third 上标了 2 处/)
     assert.match(log.inits[0].prompt, /这个按钮在右键菜单里点不到/)
+    assert.match(log.inits[0].prompt, /提交订单/, 'the heading anchor went missing')
+    assert.ok(!log.inits[0].prompt.includes('div#app'), 'the element path leaked into the prompt')
+    assert.ok(!log.inits[0].prompt.includes('> 区域'), 'the element path leaked into the prompt')
     assert.deepEqual(log.attachments, [['draft-0-0', 'draft-0-1']])
     assert.equal(webview.style.visibility, '', 'the page stayed frozen after inserting')
     assert.equal(log.released.length, 0)
   })
 
   check('page: no leftovers in the source', () => {
-    for (const marker of ['dwa-entry', 'dwa-panel', 'dwa-backdrop', 'conversation.composer.dock', 'web-annotate/api']) {
+    for (const marker of ['dwa-entry', 'dwa-panel', 'dwa-backdrop', 'conversation.composer.dock', 'annotate/api', 'web-annotate']) {
       assert.ok(!source.includes(marker), `client.js still mentions ${marker}`)
     }
   })
