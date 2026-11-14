@@ -1,0 +1,164 @@
+# dsh-web-annotate
+
+在 DeepSeek Harness（DSH）右侧栏的**网页**或**文件预览**上圈出一块，写一句批注，直接把「裁剪图 + 带定位的提示词」放进输入框。
+
+> 说「这一块」「这里不对」很难讲清楚。截图加标注是最省事的表达，这个插件把这件事压缩成：点一下 → 拖一个框 → 写一句话 → 插入。
+
+---
+
+## 它解决什么问题
+
+DSH 的右侧栏可以直接打开网页，也能预览 PDF、Markdown、txt、代码、图片。但要跟模型描述「我说的是这一段」时，只能靠文字复述——尤其是长 PDF，你截了第 12 页，模型并不知道那是哪一章哪一句。
+
+这个插件做两件事：
+
+1. **让你框**：在右侧栏画面上拖出任意多个框，每个框写一句批注。
+2. **让模型对上号**：插入时除了裁剪图，还会自动带上定位信息——PDF 的页码 + 框内文字，纯文本的行号区间 + 框内文字，Markdown 的最近小标题，网页的元素路径 / 标题 / 前 120 字。
+
+插入结果示例：
+
+```
+我在「docs/guide.pdf」里标了 2 处，编号与附图一致（每张附图是对应区域的裁图）：
+
+1. 第 12/40 页 · “缓存失效以后，页面还在用旧样式” · 这里应该改成按版本号失效
+2. 第 13/40 页 · “默认 TTL 是 5 分钟” · 这个值和配置文档不一致
+
+（定位以引号里的文字为准：页码/行号对不上时，请先按这段文字在文件里定位，再作答。）
+```
+
+## 功能
+
+- **网页**：把右侧栏浏览器冻结成一张真实位图（Electron `<webview>` 的 `capturePage()`），所见即所得——滚动位置、缩放、暗色模式都和你看到的一样，然后在图上框选、裁剪。
+- **文件**：不冻结画面，你还能继续滚动；框跟着内容走，插入时 PDF 从页面 canvas 按设备分辨率裁剪，图片按自然分辨率裁剪。
+- **多框编号**：框越多编号递增，插入时逐框裁剪、逐行对应。
+- **不挡手**：刚点「标注」时画面上只有一行提示，批注卡片要等你画出第一个框才出现，并且停在右侧栏左边（聊天区上方），不遮挡你还要继续框的地方。
+- **追加而不是覆盖**：插入走 `requestDraftInitialization({ whenDraftExists: 'append' })`，你已经写在输入框里的字不会被吃掉。
+- **跟随主题**：颜色、圆角、字号都用 DSH 的 `--dsw-*` / `--dsh-*` 变量，深浅色自动适配。
+- **中英双语**：跟随 DSH 界面语言；宿主没给 `t` 时按 `navigator.language` 兜底。
+
+## 安装
+
+### 前置条件
+
+- DSH 桌面版（Electron）。标注网页需要 `<webview>` 元素和 `capturePage()`，浏览器里的 web 版右侧栏是沙箱 iframe，拿不到像素——那种环境下按钮会根据实际能力隐藏。
+- 标注**文件预览**（PDF / Markdown / txt / 代码 / 图片）在两种宿主上都能用。
+- 不需要额外依赖，也不需要本机装 Chrome。
+
+### 用 `plugin_manager` 从本地目录安装
+
+DSH 的插件以「bundle」为单位安装，安装源就是这个仓库的**目录**，不是 npm 包名。
+
+1. 把仓库克隆到本地任意位置（建议放在不会被清理的目录）：
+
+   ```bash
+   git clone https://github.com/wuwen1994/dsh-web-annotate.git ~/dsh-plugins/dsh-web-annotate
+   ```
+
+2. 在 DSH 会话里让助手安装这个目录（或者在插件管理器里选择「从本地目录安装」）：
+
+   > 用 plugin_manager install_bundle 安装 `~/dsh-plugins/dsh-web-annotate` 的绝对路径
+
+   助手会调用 `plugin_manager({ action: "install_bundle", target: "<绝对路径>" })`。target 必须是**包的根目录**（里面直接有 `package.json`）。
+
+3. 看安装结果，不要看日志：
+
+   ```json
+   { "stage": "enable", "enabled": true, "application": "applied", "version": "0.7.3", "warnings": [] }
+   ```
+
+   `application: "applied"` 且 `warnings` 为空，才算装上了。若是 `"failed"`，把返回里的错误行贴出来再排查。
+
+4. 刷新界面（`Ctrl+R` / `Cmd+R`）。右侧栏打开一个网页或文件，右上角应该出现「标注页面」/「标注文档」按钮。
+
+### 更新
+
+```bash
+cd ~/dsh-plugins/dsh-web-annotate && git pull
+```
+
+改动了 `client.js` 这类纯前端文件，刷新界面即可生效；改动了 `index.js`（Host 半）或 `package.json` 版本号，需要重新装一次：
+
+> 用 plugin_manager 先 remove_bundle 再 install_bundle 这个目录
+
+### 卸载
+
+> 用 plugin_manager remove_bundle 卸载 dsh-web-annotate
+
+### 不要这样做
+
+- 不要手动改 `~/.dsh/profiles/<profile>/package.json` 或 `cordis.patch.yml` 来「装」插件——DSH 会在下一次插件操作时把它们改回来，而且坏掉的 profile 很难修。
+- 不要在 profile 目录里跑 `pnpm install`。
+
+## 使用
+
+1. 在右侧栏打开网页，或预览一个 PDF / Markdown / txt / 代码 / 图片文件。
+2. 右上角出现「标注页面」或「标注文档」，点它。
+   - 网页：画面定格成截图，边框会标成主色。
+   - 文件：画面不变，可以继续滚动。
+3. 在画面上拖出要标注的区域。框出来之后批注卡片才出现，停在右侧栏左边。
+4. 在卡片里选中编号，写批注；卡片上方会实时显示这一框的定位（`第 12/40 页`、`第 140–152 行`、`小标题 · 框内文字…`）。
+5. 点「插入输入框」，草稿里出现裁剪图和编号说明。检查一下，照常发送。
+
+快捷键：`Esc` 关闭标注；点空白处取消选中；框上的编号可以直接点。
+
+## 定位是怎么算出来的
+
+| 预览类型 | 锚点来源 | 提示词里写成 |
+| --- | --- | --- |
+| PDF（含 Word / PowerPoint，DSH 内部转成 PDF 再渲染） | `[data-pdf-page]` 的页码 + 该页文字层（`[data-pdf-text]`）与框相交的文字 | `第 12/40 页 · “框内文字”` |
+| 纯文本 / 代码 | `[data-textpreview-line="N"]` 的行号区间 + 相交行文字 | `第 140–152 行 · “框内文字”` |
+| Markdown | 最近的标题 + 相交叶子元素的文字 | `“小节标题” · “框内文字”` |
+| 图片 | 无文字锚点 | 只有批注（不重复写文件名） |
+| 网页 | `executeJavaScript` 尽力取元素路径、最近的 `h1`–`h6`、`innerText` 前 120 字 | `左上 · <div#app > button> 区域 · “…”` |
+
+定位是**线索**，不是保证：PDF 的文字层可能缺字，Markdown 没有行号。所以提示词末尾固定加一句，让模型以引号里的文字为准去文件里定位。这句话是刻意加的，别删。
+
+## 兼容与限制
+
+- **只标注可见区域**。网页是位图，滚出视口的部分没有像素；文件模式可以滚动后再框。
+- **不转发鼠标悬停 / 双击 / 把文件拖进页面**。框选状态下这些操作属于标注层。
+- **Excel 预览不裁图**（FortuneSheet 栅格），只给批注文字。
+- **网页模式依赖 Electron**，web 宿主的沙箱 iframe 无法读取像素。
+- 粘贴/输入法这类页面内输入不支持，标注层不接管键盘焦点。
+
+## 工作原理
+
+- 一个 bundle，包含 **Client 半**（`client.js`）和一个空的 **Host 半**（`index.js`）。Host 半只是为了 bundle 能被启用——所有逻辑都在渲染进程。
+- UI 挂在 Client 的 `shell.overlay` 槽（全窗口、默认点击穿透的浮层），所以悬浮按钮能跟着右侧栏走，也能在需要时铺满标注区域。
+- 网页：`document.querySelectorAll('webview[data-sidebar-browser-frame]')` 找到可见的右侧栏浏览器，`capturePage()` 取 `NativeImage` → `toDataURL()` 作背景；插入时 canvas 按 `naturalWidth / rect.width` 的缩放比裁剪。
+- 文件：不截图，直接覆盖透明层画框；PDF 从 `[data-pdf-page]` 里的 `<canvas>` 裁剪（canvas 宽度就是设备像素宽度）。
+- 写输入框走官方服务链，不碰 DOM：
+
+  ```
+  sessions.binding(sessionId).ctx  →  conversation.createDrafts(files)
+                                   →  input.requestDraftInitialization({ whenDraftExists: 'append' })
+                                   →  input.addAttachments(draftIds)
+                                   →  input.focus()
+  ```
+
+## 开发
+
+```
+client.js          Client 半：探测目标、截图/画框/裁剪、提示词与写入
+index.js           Host 半：空实现（仅用于 bundle 启用）
+cordis.patch.yml   把 bundle 插进 profile
+package.json       包元数据 + dsh.client 注入声明
+locale/*.json      插件管理页里的标题/描述
+docs/DETAIL.md     面向用户的详细说明（插件详情页直接引用）
+test/smoke.mjs     无浏览器冒烟测试
+icon.svg           插件图标
+```
+
+跑测试（不需要 DSH、不需要浏览器，纯 Node）：
+
+```bash
+node test/smoke.mjs
+```
+
+它用一个微型假 DOM 跑四个场景：网页（冻结位图 + 裁图）、纯文本（行号定位、不发图）、PDF 页码 + 引文并按 canvas 2× 裁剪、图片按自然分辨率裁剪；另外覆盖「没画框时不渲染批注卡片」「只注册 overlay 槽」「源码里没有上一代的残留」。输出 `ok — 15 checks` 即通过。
+
+改动后自检顺序：`node --check client.js` → `node test/smoke.mjs` → 用 `plugin_manager` 重装（或 `set_bundle` 关再开）→ 刷新界面肉眼确认。
+
+## License
+
+MIT，见 [LICENSE](LICENSE)。
