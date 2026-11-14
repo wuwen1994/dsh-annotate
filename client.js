@@ -188,8 +188,11 @@ window.__ModuleLoader__.load({
       .dwa-sb-n { position: absolute; top: -10px; left: -10px; min-width: 18px; height: 18px; padding: 0 5px; border-radius: 999px;
         background: #e5484d; color: #fff; font-size: 11px; font-weight: 600; line-height: 18px; text-align: center; }
       .dwa-sb-box[data-selected='1'] .dwa-sb-n { background: #2f6fed; }
-      .dwa-sb-del { position: absolute; top: -10px; right: -10px; width: 18px; height: 18px; padding: 0; border: none; border-radius: 999px;
-        background: #2f6fed; color: #fff; font: inherit; font-size: 11px; line-height: 18px; text-align: center; cursor: pointer; }
+      /* Keep the badge inside the region: the overlay clips anything that
+         pokes out, and a full-pane region would otherwise lose its button. */
+      .dwa-sb-del { position: absolute; top: 3px; right: 3px; width: 16px; height: 16px; padding: 0; border: none; border-radius: 999px;
+        background: rgba(47,111,237,.92); color: #fff; font: inherit; font-size: 10px; line-height: 16px; text-align: center; cursor: pointer; }
+      .dwa-sb-del:hover { background: #2f6fed; }
       .dwa-sb-ghost { position: absolute; border: 1px dashed #e5484d; background: rgba(229,72,77,.1); }
 
       .dwa-sheet { position: fixed; z-index: 1401; width: min(320px, calc(100vw - 24px)); max-height: calc(100vh - 20px); overflow-y: auto; display: flex; flex-direction: column; gap: 6px;
