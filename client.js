@@ -23,9 +23,7 @@ window.__ModuleLoader__.load({
 
     const ZH = {
       close: '关闭',
-      notePlaceholder: '这里要改什么？',
-      remove: '删除',
-      insert: '插入输入框',
+      notePlaceholder: '写批注，回车插入',
       promptNoNote: '（未写批注）',
       posLt: '左上', posCt: '上方居中', posRt: '右上',
       posLm: '左侧居中', posCm: '页面中部', posRm: '右侧居中',
@@ -36,9 +34,6 @@ window.__ModuleLoader__.load({
       errShot: '截图失败：{msg}',
       sbButtonPage: '标注页面',
       sbButtonDoc: '标注文档',
-      sbButtonHint: '截取右侧栏当前的画面，圈出区域写批注',
-      sbEmpty: '在画面上拖出一个方框，再写批注。',
-      sbTip: '在画面上拖出要标注的区域',
       sbNeedSession: '先在左侧选一个会话，批注才能插进输入框。',
       sbNoPage: '右侧栏里还没有打开的网页或文件。',
       sbNoCapture: '当前环境不支持网页截图。',
@@ -55,14 +50,11 @@ window.__ModuleLoader__.load({
       sbAnchorLine: '第 {line} 行',
       sbAnchorHeading: '「{heading}」小节',
       sbAnchorElement: '<{tag}> 区域',
-      sbAnchorFile: '这个文件',
     }
 
     const EN = {
       close: 'Close',
-      notePlaceholder: 'What should change here?',
-      remove: 'Remove',
-      insert: 'Insert into composer',
+      notePlaceholder: 'Note — press Enter to insert',
       promptNoNote: '(no note)',
       posLt: 'top left', posCt: 'top centre', posRt: 'top right',
       posLm: 'centre left', posCm: 'centre', posRm: 'centre right',
@@ -73,9 +65,6 @@ window.__ModuleLoader__.load({
       errShot: 'Could not capture the page: {msg}',
       sbButtonPage: 'Annotate page',
       sbButtonDoc: 'Annotate file',
-      sbButtonHint: 'Capture what the sidebar shows, box the regions and write notes',
-      sbEmpty: 'Drag a box on the picture, then write a note.',
-      sbTip: 'Drag out the region you want to annotate',
       sbNeedSession: 'Pick a session on the left so the notes have a composer to land in.',
       sbNoPage: 'The sidebar is not showing a page or a file.',
       sbNoCapture: 'This environment cannot capture the page.',
@@ -92,7 +81,6 @@ window.__ModuleLoader__.load({
       sbAnchorLine: 'line {line}',
       sbAnchorHeading: 'under "{heading}"',
       sbAnchorElement: 'in <{tag}>',
-      sbAnchorFile: 'this file',
     }
 
     function translator(dict) {
@@ -161,21 +149,20 @@ window.__ModuleLoader__.load({
     }
 
     const CSS = `
-      .dwa-btn { display: inline-flex; align-items: center; gap: 6px; padding: 6px 12px; font: inherit; font-size: 13px; cursor: pointer;
-        color: var(--dsw-alias-label-primary, #111); background: transparent; border: 1px solid var(--dsw-alias-border-l2, rgba(0,0,0,.14));
-        border-radius: var(--dsw-radius-sm, 6px); white-space: nowrap; }
-      .dwa-btn:not(.dwa-btn-primary):hover { background: var(--dsw-alias-interactive-bg-hover, rgba(127,127,127,.12)); }
-      .dwa-btn[disabled] { opacity: .5; cursor: default; }
-      .dwa-btn-primary { color: #fff; background: var(--dsw-alias-brand-primary, #3b82f6); border-color: transparent; }
+      /* Icon button sized to the sidebar chrome's own toolbar tools (28x28). */
+      .dwa-tool { display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; flex: 0 0 auto;
+        padding: 0; border: 0; border-radius: var(--dsw-radius-sm, 6px); background: transparent; cursor: pointer;
+        color: var(--dsw-alias-label-secondary, #4a4f57); }
+      .dwa-tool:hover { background: var(--dsw-alias-interactive-bg-hover, rgba(127,127,127,.12)); color: var(--dsw-alias-label-primary, #111); }
+      .dwa-tool[disabled] { opacity: .5; cursor: default; }
+      .dwa-tool svg { width: 16px; height: 16px; }
+      .dwa-slot { display: contents; }
       .dwa-error { color: #e5484d; font-size: 12px; }
 
-      /* Floating "annotate" button over whatever the sidebar shows. */
-      .dwa-float { position: fixed; z-index: 1400; display: inline-flex; align-items: center; gap: 5px; height: 28px; padding: 0 10px;
-        border: 1px solid var(--dsw-alias-border-l1, rgba(0,0,0,.1)); border-radius: 999px; cursor: pointer;
-        background: var(--dsw-specific-menu, #fff); color: var(--dsw-alias-label-secondary, #4a4f57);
-        font: inherit; font-size: 12px; white-space: nowrap; box-shadow: 0 4px 14px rgba(0,0,0,.18); }
-      .dwa-float:hover { color: var(--dsw-alias-label-primary, #111); border-color: var(--dsw-alias-border-l2, rgba(0,0,0,.16)); }
-      .dwa-float svg { width: 14px; height: 14px; }
+      /* Fallback when the pane has no toolbar to host the icon. */
+      .dwa-float { position: fixed; z-index: 1400; border-radius: var(--dsw-radius-sm, 6px);
+        background: var(--dsw-specific-menu, #fff); border: 1px solid var(--dsw-alias-border-l1, rgba(0,0,0,.12));
+        box-shadow: 0 4px 14px rgba(0,0,0,.18); }
       .dwa-sb-toast { position: fixed; z-index: 1400; max-width: 260px; padding: 6px 10px; border-radius: var(--dsw-radius-sm, 6px);
         background: rgba(229,72,77,.96); color: #fff; font-size: 12px; line-height: 1.45; box-shadow: 0 6px 18px rgba(0,0,0,.24); }
 
@@ -188,11 +175,6 @@ window.__ModuleLoader__.load({
       .dwa-sb-n { position: absolute; top: -10px; left: -10px; min-width: 18px; height: 18px; padding: 0 5px; border-radius: 999px;
         background: #e5484d; color: #fff; font-size: 11px; font-weight: 600; line-height: 18px; text-align: center; }
       .dwa-sb-box[data-selected='1'] .dwa-sb-n { background: #2f6fed; }
-      /* Keep the badge inside the region: the overlay clips anything that
-         pokes out, and a full-pane region would otherwise lose its button. */
-      .dwa-sb-del { position: absolute; top: 3px; right: 3px; width: 16px; height: 16px; padding: 0; border: none; border-radius: 999px;
-        background: rgba(47,111,237,.92); color: #fff; font: inherit; font-size: 10px; line-height: 16px; text-align: center; cursor: pointer; }
-      .dwa-sb-del:hover { background: #2f6fed; }
       .dwa-sb-ghost { position: absolute; border: 1px dashed #e5484d; background: rgba(229,72,77,.1); }
 
       .dwa-sheet { position: fixed; z-index: 1401; width: min(320px, calc(100vw - 24px)); max-height: calc(100vh - 20px); overflow-y: auto; display: flex; flex-direction: column; gap: 6px;
@@ -200,20 +182,13 @@ window.__ModuleLoader__.load({
         background: var(--dsw-specific-menu, rgba(255,255,255,.96));
         border: 1px solid var(--dsw-alias-border-l1, rgba(0,0,0,.1)); box-shadow: 0 10px 30px rgba(0,0,0,.28); }
       .dwa-sheet[data-compact='1'] { padding: 6px 8px; }
-      .dwa-tip { position: absolute; left: 50%; top: 10px; transform: translateX(-50%); padding: 4px 10px; border-radius: 999px;
-        background: rgba(12,14,20,.72); color: #fff; font-size: 11px; line-height: 1.5; white-space: nowrap; pointer-events: none; }
       .dwa-sheet-bar { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
       .dwa-chip { min-width: 22px; height: 22px; padding: 0 6px; border-radius: 999px; border: 1px solid var(--dsw-alias-border-l2, rgba(0,0,0,.14));
         background: transparent; color: var(--dsw-alias-label-secondary, #4a4f57); font: inherit; font-size: 12px; cursor: pointer; }
       .dwa-chip[data-selected='1'] { background: var(--dsw-alias-brand-primary, #2f6fed); border-color: transparent; color: #fff; }
-      .dwa-anchor { font-size: 11px; line-height: 1.45; color: var(--dsw-alias-label-tertiary, #8a8f98); }
-      .dwa-anchor b { font-weight: 600; color: var(--dsw-alias-label-secondary, #4a4f57); }
-      .dwa-anchor q { quotes: '「' '」'; color: var(--dsw-alias-label-secondary, #4a4f57); }
       .dwa-sheet textarea { width: 100%; box-sizing: border-box; min-height: 44px; max-height: 96px; resize: vertical; padding: 6px 8px;
         font: inherit; font-size: 13px; color: var(--dsw-alias-label-primary, #111); background: var(--dsw-alias-bg-l1, rgba(127,127,127,.06));
         border: 1px solid var(--dsw-alias-border-l2, rgba(0,0,0,.12)); border-radius: var(--dsw-radius-sm, 6px); outline: none; }
-      .dwa-sheet-foot { display: flex; align-items: center; gap: 8px; }
-      .dwa-sheet-gap { flex: 1; }
       .dwa-x { width: 22px; height: 22px; margin-left: auto; border: none; border-radius: var(--dsw-radius-sm, 6px); background: transparent;
         color: var(--dsw-alias-label-tertiary, #8a8f98); font: inherit; font-size: 13px; line-height: 1; cursor: pointer; }
       .dwa-x:hover { background: var(--dsw-alias-interactive-bg-hover, rgba(127,127,127,.14)); color: var(--dsw-alias-label-primary, #111); }
@@ -281,6 +256,55 @@ window.__ModuleLoader__.load({
       try { text = decodeURIComponent(url) } catch { text = url }
       text = text.replace(/^file:\/\/\//, '').replace(/^file:\/\//, '')
       return text
+    }
+
+    /**
+     * The chrome row that owns the pane's own controls: the toolbar form above a
+     * browser tab, or the frame header above a document preview. We insert one
+     * (invisible) placeholder there and portal our icon into it, which is the
+     * only way to sit next to the host's own reload button — the pane exposes no
+     * slot for extra actions.
+     */
+    function paneChrome(target) {
+      if (!target) return null
+      if (target.kind === 'browser') {
+        for (let node = target.node && target.node.parentElement; node; node = node.parentElement) {
+          let form = null
+          for (const child of node.children || []) {
+            if (child.tagName === 'FORM') { form = child; break }
+          }
+          if (form) {
+            const children = form.children || []
+            // Back, forward, reload, then the address box. Anchoring on the
+            // address box keeps us right after reload whether the host wraps
+            // its reload button in a tooltip element or leaves it a plain
+            // button, so we never have to count buttons.
+            const input = query(form, 'input')
+            const addressBox = input && input.parentElement
+            if (addressBox && addressBox.parentElement === form) {
+              return { host: form, before: addressBox }
+            }
+            const buttons = children.filter((child) => child.tagName === 'BUTTON')
+            const reload = buttons[2] || children[2] || null
+            return { host: form, before: (reload && reload.nextSibling) || null }
+          }
+          if (node === document.body) break
+        }
+        return null
+      }
+      // The path label lives in the frame header, which wraps the renderer
+      // root — walk up until some ancestor owns that label.
+      for (let node = target.root; node; node = node.parentElement) {
+        const label = query(node, PREVIEW_PATH)
+        const header = label && label.parentElement
+        if (header) {
+          const children = header.children || []
+          const last = children[children.length - 1] || null
+          return { host: header, before: last && last !== label ? last : null }
+        }
+        if (node === document.body) break
+      }
+      return null
     }
 
     function scrollOf(target) {
@@ -733,6 +757,28 @@ window.__ModuleLoader__.load({
       const noteRefs = useRef({})
       const shotRef = useRef(null)
       const targetRef = useRef(null)
+      const slotRef = useRef(null)
+      const [slotHost, setSlotHost] = useState(null)
+
+      // Keep one placeholder inside the pane's own toolbar, so the icon sits
+      // next to the host's reload button instead of floating over the page.
+      const placeSlot = useCallback((found) => {
+        const chrome = paneChrome(found)
+        if (!chrome) {
+          setSlotHost(null)
+          return
+        }
+        let slot = slotRef.current
+        if (!slot) {
+          slot = document.createElement('span')
+          slot.className = 'dwa-slot'
+          slotRef.current = slot
+        }
+        if (slot.parentElement !== chrome.host) {
+          try { chrome.host.insertBefore(slot, chrome.before || null) } catch { /* host moved on */ }
+        }
+        setSlotHost((prev) => (prev === slot ? prev : slot))
+      }, [])
 
       // Glue the button to the sidebar pane: it can be dragged, resized, or
       // replaced when another tab takes over.
@@ -740,6 +786,7 @@ window.__ModuleLoader__.load({
         let last = ''
         const sync = () => {
           const found = findTarget()
+          placeSlot(found)
           const key = found
             ? `${found.kind}:${Math.round(found.rect.left)}:${Math.round(found.rect.top)}:${Math.round(found.rect.width)}:${Math.round(found.rect.height)}`
             : ''
@@ -755,8 +802,11 @@ window.__ModuleLoader__.load({
         return () => {
           clearInterval(timer)
           window.removeEventListener('resize', sync)
+          const slot = slotRef.current
+          slotRef.current = null
+          if (slot && slot.parentElement) slot.parentElement.removeChild(slot)
         }
-      }, [])
+      }, [placeSlot])
 
       const unfreeze = useCallback(() => {
         const view = viewRef.current
@@ -781,6 +831,9 @@ window.__ModuleLoader__.load({
       useEffect(() => () => unfreeze(), [unfreeze])
 
       const openMarkup = useCallback(async () => {
+        // Already marking: the icon is still visible in the pane's toolbar, so
+        // a second click must not start a nested session.
+        if (shotRef.current) return
         const found = findTarget()
         if (!found) {
           setError(t('sbNoPage'))
@@ -1026,20 +1079,27 @@ window.__ModuleLoader__.load({
       const selectedBox = selected ? boxes.find((box) => box.id === selected) ?? null : null
 
       if (!shot) {
+        const trigger = anchor
+          ? el('button', {
+            type: 'button',
+            className: 'dwa-tool',
+            title: t(anchor.kind === 'browser' ? 'sbButtonPage' : 'sbButtonDoc'),
+            'aria-label': t(anchor.kind === 'browser' ? 'sbButtonPage' : 'sbButtonDoc'),
+            onPointerDown: (event) => event.stopPropagation(),
+            onClick: (event) => { event.preventDefault(); event.stopPropagation(); void openMarkup() },
+          }, el(FrameIcon))
+          : null
         return el(React.Fragment, null,
           el('style', null, CSS),
-          anchor
-            ? el('button', {
-              type: 'button',
+          trigger && slotHost ? createPortal(trigger, slotHost) : null,
+          trigger && !slotHost
+            ? el('div', {
               className: 'dwa-float',
-              title: t('sbButtonHint'),
               style: {
-                left: `${Math.max(8, Math.round(anchor.left + anchor.width) - 118)}px`,
-                top: `${Math.round(anchor.top) + 10}px`,
+                left: `${Math.max(8, Math.round(anchor.left + anchor.width) - 36)}px`,
+                top: `${Math.round(anchor.top) + 6}px`,
               },
-              onPointerDown: (event) => event.stopPropagation(),
-              onClick: () => { void openMarkup() },
-            }, el(FrameIcon), t(anchor.kind === 'browser' ? 'sbButtonPage' : 'sbButtonDoc'))
+            }, trigger)
             : null,
           error && anchor
             ? el('div', {
@@ -1053,10 +1113,6 @@ window.__ModuleLoader__.load({
       }
 
       const total = boxes.length
-      const anchorLine = selectedBox
-        ? el('div', { className: 'dwa-anchor' },
-          el('b', null, locator(t, selectedBox, { kind: shot.mode === 'frozen' ? 'browser' : 'document' }, { element: false }) || t('sbAnchorFile')))
-        : null
 
       const live = shot.mode === 'live'
       // The anchor is the region in viewport pixels: frozen boxes are already
@@ -1107,7 +1163,6 @@ window.__ModuleLoader__.load({
               onClick: () => setSelected(box.id),
             }, String(index + 1))),
             el('button', { type: 'button', className: 'dwa-x', title: t('close'), onClick: cancel }, '✕')),
-          selectedBox ? anchorLine : null,
           selectedBox
             ? el('textarea', {
               ref: (node) => {
@@ -1115,18 +1170,19 @@ window.__ModuleLoader__.load({
                 else delete noteRefs.current[selectedBox.id]
               },
               value: selectedBox.note,
-              placeholder: t('notePlaceholder'),
+              placeholder: busy ? t('sbInserting') : t('notePlaceholder'),
+              readOnly: busy,
               onChange: (event) => updateNote(selectedBox.id, event.target.value),
+              // Enter inserts, Shift+Enter keeps the newline — the card has no
+              // button of its own.
+              onKeyDown: (event) => {
+                if (event.key !== 'Enter' || event.shiftKey || event.isComposing) return
+                if (event.nativeEvent && event.nativeEvent.isComposing) return
+                event.preventDefault()
+                void insert()
+              },
             })
             : null,
-          el('div', { className: 'dwa-sheet-foot' },
-            el('span', { className: 'dwa-sheet-gap' }),
-            el('button', {
-              type: 'button',
-              className: 'dwa-btn dwa-btn-primary',
-              disabled: busy || boxes.length === 0,
-              onClick: () => { void insert() },
-            }, busy ? t('sbInserting') : t('insert'))),
           error ? el('div', { className: 'dwa-error' }, error) : null,
         ]
 
@@ -1159,16 +1215,7 @@ window.__ModuleLoader__.load({
           onPointerDown: (event) => event.stopPropagation(),
           onClick: (event) => { event.stopPropagation(); setSelected(box.id) },
         },
-        el('div', { className: 'dwa-sb-n' }, String(index + 1)),
-        selected === box.id
-          ? el('button', {
-            type: 'button',
-            className: 'dwa-sb-del',
-            title: t('remove'),
-            onPointerDown: (event) => event.stopPropagation(),
-            onClick: (event) => { event.stopPropagation(); removeBox(box.id) },
-          }, '✕')
-          : null)),
+        el('div', { className: 'dwa-sb-n' }, String(index + 1)))),
         dragging
           ? el('div', {
             className: 'dwa-sb-ghost',
@@ -1181,10 +1228,6 @@ window.__ModuleLoader__.load({
           })
           : null)
 
-      const tip = total === 0 && !dragging
-        ? el('div', { className: 'dwa-tip' }, t('sbTip'))
-        : null
-
       const spot = focusBox ? placeSheet(focusBox) : { left: 10, top: 10 }
       const sheetStyle = {
         left: `${Math.round(spot.left)}px`,
@@ -1192,7 +1235,18 @@ window.__ModuleLoader__.load({
         width: `${sheetWidth}px`,
       }
 
-      const surface = el('div', { className: 'dwa-freeze', 'data-mode': shot.mode, style: frameStyle }, stage, tip)
+      // A right click anywhere on the picture ends the session, so the user can
+      // dismiss it without hunting for the card's close button.
+      const surface = el('div', {
+        className: 'dwa-freeze',
+        'data-mode': shot.mode,
+        style: frameStyle,
+        onContextMenu: (event) => {
+          event.preventDefault()
+          event.stopPropagation()
+          cancel()
+        },
+      }, stage)
 
       const sheet = sheetParts
         ? el('div', { className: 'dwa-sheet', 'data-compact': selectedBox ? '0' : '1', style: sheetStyle }, sheetParts)

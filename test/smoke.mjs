@@ -208,6 +208,32 @@ class FakeNode {
     return this
   }
 
+  appendChild(child) {
+    return this.append(child)
+  }
+
+  insertBefore(child, reference) {
+    child.parentElement = this
+    const at = reference ? this.children.indexOf(reference) : -1
+    if (at < 0) this.children.push(child)
+    else this.children.splice(at, 0, child)
+    return child
+  }
+
+  removeChild(child) {
+    const at = this.children.indexOf(child)
+    if (at >= 0) this.children.splice(at, 1)
+    child.parentElement = null
+    return child
+  }
+
+  get nextSibling() {
+    const parent = this.parentElement
+    if (!parent) return null
+    const at = parent.children.indexOf(this)
+    return at >= 0 ? parent.children[at + 1] ?? null : null
+  }
+
   get textContent() {
     if (this.children.length === 0) return this.text
     return `${this.text}${this.children.map((child) => child.textContent).join('')}`
@@ -466,17 +492,32 @@ async function scenarioPage() {
     heading: '提交订单',
     quote: '提交订单',
   })
-  globalThis.document = fakeDocument([webview], canvasLog)
+  // The pane chrome: back / forward / reload buttons, then the address box.
+  // The plugin has to slot its icon right after reload. The real host wraps
+  // its reload button in a tooltip element and puts the address input in a box,
+  // so the fixture does the same — the placeholder must still land in between.
+  const toolbar = new FakeNode('form', {})
+  toolbar.append(new FakeNode('button', { 'aria-label': 'back' }))
+  toolbar.append(new FakeNode('button', { 'aria-label': 'forward' }))
+  const reload = new FakeNode('button', { 'aria-label': 'reload' })
+  const reloadWrap = new FakeNode('span', { className: 'dwa-fake-tooltip' }, null, [reload])
+  toolbar.append(reloadWrap)
+  const addressBox = new FakeNode('div', { className: 'dwa-fake-address' })
+  addressBox.append(new FakeNode('input', { 'aria-label': 'address' }))
+  toolbar.append(addressBox)
+  const pane = new FakeNode('div', {}, rect(260, 60, 1020, 800), [toolbar, webview])
+  globalThis.document = fakeDocument([pane], canvasLog)
   globalThis.Image = FakeImage
 
   const scene = await mountScenario({ runtime, plugin, ctx, useSessions, stage: rect(260, 100, 1020, 760) })
 
-  const floatButton = find(scene.tree, (node) => node.type === 'button' && node.props?.className === 'dwa-float')
-  check('page: floating button sits on the webview', () => {
-    assert.ok(floatButton, 'no floating button')
-    assert.match(textOf(floatButton), /标注页面/)
-    assert.equal(floatButton.props.style.left, `${1280 - 118}px`)
-    assert.equal(floatButton.props.style.top, '110px')
+  const trigger = find(scene.tree, (node) => node.type === 'button' && node.props?.className === 'dwa-tool')
+  check('page: the icon sits in the pane toolbar, right after reload', () => {
+    assert.ok(trigger, 'no annotate icon')
+    assert.equal(trigger.props.title, '标注页面')
+    const slot = toolbar.children[toolbar.children.indexOf(reloadWrap) + 1]
+    assert.ok(slot && slot.tagName === 'SPAN', 'the placeholder did not land after the reload button')
+    assert.equal(slot.children.length, 0, 'the placeholder must stay empty in the DOM')
   })
 
   check('page: only the overlay is registered', () => {
@@ -484,7 +525,7 @@ async function scenarioPage() {
     assert.equal(ctx.slots.registry['shell.overlay'].options.id, 'annotate.page')
   })
 
-  floatButton.props.onClick()
+  trigger.props.onClick({ preventDefault() {}, stopPropagation() {} })
   await settle(runtime, scene.mount)
   scene.tree = scene.mount()
 
@@ -501,7 +542,7 @@ async function scenarioPage() {
   check('page: no editor before a region is picked', () => {
     assert.ok(!find(scene.tree, (node) => node.type === 'textarea'), 'the note box covers the page too early')
     assert.ok(!find(scene.tree, (node) => node.props?.className === 'dwa-sheet'), 'the sheet covers the page too early')
-    assert.ok(find(scene.tree, (node) => node.props?.className === 'dwa-tip'), 'no hint on how to start')
+    assert.ok(!find(scene.tree, (node) => node.props?.className === 'dwa-tip'), 'the tip line came back')
   })
 
   const stageNode = find(scene.tree, (node) => node.props?.className === 'dwa-stage')
@@ -559,14 +600,18 @@ async function scenarioPage() {
     assert.equal(chip.props['data-selected'], '1')
   })
 
-  check('page: the card keeps only chips, a delete badge and a close button', () => {
+  check('page: the card keeps only chips and a close button', () => {
     assert.ok(!find(scene.tree, (node) => node.props?.className === 'dwa-sheet-hint'), 'the hint line came back')
     assert.ok(find(scene.tree, (node) => node.props?.className === 'dwa-sheet-bar'), 'no card bar')
     assert.ok(find(scene.tree, (node) => node.props?.className === 'dwa-x'), 'no close button')
+    // The locator is recorded for the prompt, never shown in the card.
+    assert.equal(find(scene.tree, (node) => node.props?.className === 'dwa-anchor'), null, 'the locator strip came back')
+    // Deleting a region moved to the keyboard; the region paints nothing but
+    // its number now.
     const badges = findAll(scene.tree, (node) => node.props?.className === 'dwa-sb-del')
-    assert.equal(badges.length, 1, 'exactly the selected region should offer a delete badge')
-    const removeButtons = findAll(scene.tree, (node) => node.type === 'button' && textOf(node) === '删除')
-    assert.equal(removeButtons.length, 0, 'the bottom-left remove button is back')
+    assert.equal(badges.length, 0, 'the region still paints a close badge')
+    const insertButtons = findAll(scene.tree, (node) => node.type === 'button' && node.props?.className === 'dwa-btn')
+    assert.equal(insertButtons.length, 0, 'the insert button came back')
     assert.ok(!source.includes('brightness('), 'the primary button still has a hover filter')
   })
 
@@ -575,8 +620,12 @@ async function scenarioPage() {
   await runtime.flush()
   scene.tree = scene.mount()
 
-  const insertButton = find(scene.tree, (node) => node.type === 'button' && node.props?.className === 'dwa-btn dwa-btn-primary')
-  insertButton.props.onClick()
+  // Enter in the note box inserts — there is no button to click.
+  find(scene.tree, (node) => node.type === 'textarea').props.onKeyDown({
+    key: 'Enter',
+    shiftKey: false,
+    preventDefault() {},
+  })
   await settle(runtime, scene.mount)
   scene.tree = scene.mount()
 
@@ -599,6 +648,24 @@ async function scenarioPage() {
     assert.deepEqual(log.attachments, [['draft-0-0', 'draft-0-1']])
     assert.equal(webview.style.visibility, '', 'the page stayed frozen after inserting')
     assert.equal(log.released.length, 0)
+  })
+
+  // A right click dismisses the whole annotation session.
+  const again = find(scene.tree, (node) => node.type === 'button' && node.props?.className === 'dwa-tool')
+  again.props.onClick({ preventDefault() {}, stopPropagation() {} })
+  await settle(runtime, scene.mount)
+  scene.tree = scene.mount()
+  find(scene.tree, (node) => node.props?.className === 'dwa-freeze').props.onContextMenu({
+    preventDefault() {},
+    stopPropagation() {},
+  })
+  await runtime.flush()
+  scene.tree = scene.mount()
+
+  check('page: a right click leaves the marking mode', () => {
+    assert.equal(find(scene.tree, (node) => node.props?.className === 'dwa-freeze'), null, 'the overlay stayed open')
+    assert.equal(webview.style.visibility, '', 'the page stayed frozen after a right click')
+    assert.ok(!find(scene.tree, (node) => node.props?.className === 'dwa-sheet'), 'the card survived the right click')
   })
 
   check('page: no leftovers in the source', () => {
@@ -632,13 +699,13 @@ async function scenarioText() {
 
   const scene = await mountScenario({ runtime, plugin, ctx, useSessions, stage: rect(260, 100, 1020, 760) })
 
-  const floatButton = find(scene.tree, (node) => node.type === 'button' && node.props?.className === 'dwa-float')
-  check('text: button knows it is a document', () => {
-    assert.ok(floatButton, 'no floating button')
-    assert.match(textOf(floatButton), /标注文档/)
+  const trigger = find(scene.tree, (node) => node.type === 'button' && node.props?.className === 'dwa-tool')
+  check('text: the icon knows it is a document', () => {
+    assert.ok(trigger, 'no annotate icon')
+    assert.equal(trigger.props.title, '标注文档')
   })
 
-  floatButton.props.onClick()
+  trigger.props.onClick({ preventDefault() {}, stopPropagation() {} })
   await settle(runtime, scene.mount)
   scene.tree = scene.mount()
 
@@ -655,12 +722,9 @@ async function scenarioText() {
   await settle(runtime, scene.mount)
   scene.tree = scene.mount()
 
-  const anchor = find(scene.tree, (node) => node.props?.className === 'dwa-anchor')
-  check('text: box carries a line-range locator', () => {
-    assert.ok(anchor, 'no locator strip')
-    const text = textOf(anchor)
-    assert.match(text, /第 138–139 行|第 139–140 行|第 138 行|第 139 行/, `unexpected locator: ${text}`)
-    assert.match(text, /缓存失效/)
+  check('text: the locator stays out of the card', () => {
+    assert.equal(find(scene.tree, (node) => node.props?.className === 'dwa-anchor'), null, 'the locator strip came back')
+    assert.ok(find(scene.tree, (node) => node.type === 'textarea'), 'no note box')
   })
 
   const note = find(scene.tree, (node) => node.type === 'textarea')
@@ -668,8 +732,7 @@ async function scenarioText() {
   await runtime.flush()
   scene.tree = scene.mount()
 
-  const insertButton = find(scene.tree, (node) => node.type === 'button' && node.props?.className === 'dwa-btn dwa-btn-primary')
-  insertButton.props.onClick()
+  find(scene.tree, (node) => node.type === 'textarea').props.onKeyDown({ key: 'Enter', shiftKey: false, preventDefault() {} })
   await settle(runtime, scene.mount)
   scene.tree = scene.mount()
 
@@ -720,8 +783,8 @@ async function scenarioPdf() {
 
   const scene = await mountScenario({ runtime, plugin, ctx, useSessions, stage: rect(260, 100, 1020, 760) })
 
-  const floatButton = find(scene.tree, (node) => node.type === 'button' && node.props?.className === 'dwa-float')
-  floatButton.props.onClick()
+  const trigger = find(scene.tree, (node) => node.type === 'button' && node.props?.className === 'dwa-tool')
+  trigger.props.onClick({ preventDefault() {}, stopPropagation() {} })
   await settle(runtime, scene.mount)
   scene.tree = scene.mount()
 
@@ -732,12 +795,9 @@ async function scenarioPdf() {
   await settle(runtime, scene.mount)
   scene.tree = scene.mount()
 
-  const anchor = find(scene.tree, (node) => node.props?.className === 'dwa-anchor')
-  check('pdf: box carries page + quoted text', () => {
-    assert.ok(anchor, 'no locator strip')
-    const text = textOf(anchor)
-    assert.match(text, /第 2\/3 页/, `unexpected locator: ${text}`)
-    assert.match(text, /缓存失效策略/)
+  check('pdf: the locator stays out of the card', () => {
+    assert.equal(find(scene.tree, (node) => node.props?.className === 'dwa-anchor'), null, 'the locator strip came back')
+    assert.ok(find(scene.tree, (node) => node.type === 'textarea'), 'no note box')
   })
 
   const note = find(scene.tree, (node) => node.type === 'textarea')
@@ -745,8 +805,7 @@ async function scenarioPdf() {
   await runtime.flush()
   scene.tree = scene.mount()
 
-  const insertButton = find(scene.tree, (node) => node.type === 'button' && node.props?.className === 'dwa-btn dwa-btn-primary')
-  insertButton.props.onClick()
+  find(scene.tree, (node) => node.type === 'textarea').props.onKeyDown({ key: 'Enter', shiftKey: false, preventDefault() {} })
   await settle(runtime, scene.mount)
   scene.tree = scene.mount()
 
@@ -789,8 +848,8 @@ async function scenarioImage() {
 
   const scene = await mountScenario({ runtime, plugin, ctx, useSessions, stage: rect(260, 100, 1020, 760) })
 
-  const floatButton = find(scene.tree, (node) => node.type === 'button' && node.props?.className === 'dwa-float')
-  floatButton.props.onClick()
+  const trigger = find(scene.tree, (node) => node.type === 'button' && node.props?.className === 'dwa-tool')
+  trigger.props.onClick({ preventDefault() {}, stopPropagation() {} })
   await settle(runtime, scene.mount)
   scene.tree = scene.mount()
 
@@ -806,8 +865,7 @@ async function scenarioImage() {
   await runtime.flush()
   scene.tree = scene.mount()
 
-  const insertButton = find(scene.tree, (node) => node.type === 'button' && node.props?.className === 'dwa-btn dwa-btn-primary')
-  insertButton.props.onClick()
+  find(scene.tree, (node) => node.type === 'textarea').props.onKeyDown({ key: 'Enter', shiftKey: false, preventDefault() {} })
   await settle(runtime, scene.mount)
 
   check('image: crop comes from the rendered image at natural scale', () => {
