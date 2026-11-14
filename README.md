@@ -46,7 +46,7 @@ DSH 的右侧栏可以直接打开网页，也能预览 PDF、Markdown、txt、�
 
 ### 用 `plugin_manager` 从本地目录安装
 
-DSH 的插件以「bundle」为单位安装，安装源就是这个仓库的**目录**，不是 npm 包名。
+DSH 的插件以「bundle」为单位安装。这个包的 id 是 `@wuwen1994/dsh-annotate`；目前还没有发到 npm，所以安装源用仓库的**目录**（下面第 2 步），target 要指向目录而不是包名。
 
 1. 把仓库克隆到本地任意位置（建议放在不会被清理的目录）：
 
@@ -63,7 +63,7 @@ DSH 的插件以「bundle」为单位安装，安装源就是这个仓库的**�
 3. 看安装结果，不要看日志：
 
    ```json
-   { "stage": "enable", "enabled": true, "application": "applied", "version": "0.11.2", "warnings": [] }
+   { "stage": "enable", "enabled": true, "application": "applied", "version": "0.12.0", "warnings": [] }
    ```
 
    `application: "applied"` 且 `warnings` 为空，才算装上了。若是 `"failed"`，把返回里的错误行贴出来再排查。
@@ -82,7 +82,7 @@ cd ~/dsh-plugins/dsh-annotate && git pull
 
 ### 卸载
 
-> 用 plugin_manager remove_bundle 卸载 dsh-annotate
+> 用 plugin_manager remove_bundle 卸载 `@wuwen1994/dsh-annotate`
 
 ### 不要这样做
 
@@ -182,7 +182,7 @@ Then ask the DSH agent to install that folder, i.e. call
 Success looks like `{"stage":"enable","application":"applied","warnings":[]}`.
 Refresh the window afterwards. To update: `git pull`, then
 `remove_bundle` + `install_bundle` when `index.js` or the version changed.
-To remove: `plugin_manager({ action: "remove_bundle", target: "dsh-annotate" })`.
+To remove: `plugin_manager({ action: "remove_bundle", target: "@wuwen1994/dsh-annotate" })`.
 
 **Requirements**: annotating a *web page* needs the DSH desktop (Electron)
 build, because it reads pixels through the sidebar `<webview>` and its

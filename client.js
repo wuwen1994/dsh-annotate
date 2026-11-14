@@ -9,7 +9,7 @@
  * range, heading, quoted text) — into the composer.
  */
 window.__ModuleLoader__.load({
-  id: 'dsh-annotate',
+  id: '@wuwen1994/dsh-annotate',
   factory(require) {
     const React = require('react')
     const { createPortal } = require('react-dom')

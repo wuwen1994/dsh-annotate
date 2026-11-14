@@ -366,7 +366,7 @@ function loadModule(runtime) {
   // eslint-disable-next-line no-new-func
   new Function('window', 'globalThis', source)(globalThis.window, globalThis)
   assert.ok(captured, 'client.js did not register with __ModuleLoader__')
-  assert.equal(captured.id, 'dsh-annotate')
+  assert.equal(captured.id, '@wuwen1994/dsh-annotate')
   const require = (name) => {
     if (name === 'react') return runtime.React
     if (name === 'react-dom') return runtime.reactDom
