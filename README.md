@@ -63,7 +63,7 @@ DSH 的插件以「bundle」为单位安装。这个包的 id 是 `@wuwen1994/ds
 3. 看安装结果，不要看日志：
 
    ```json
-   { "stage": "enable", "enabled": true, "application": "applied", "version": "0.12.2", "warnings": [] }
+   { "stage": "enable", "enabled": true, "application": "applied", "version": "0.12.3", "warnings": [] }
    ```
 
    `application: "applied"` 且 `warnings` 为空，才算装上了。若是 `"failed"`，把返回里的错误行贴出来再排查。
@@ -160,6 +160,28 @@ node test/smoke.mjs
 它用一个微型假 DOM 跑四个场景：网页（冻结位图 + 裁图）、纯文本（行号定位、不发图）、PDF 页码 + 引文并按 canvas 2× 裁剪、图片按自然分辨率裁剪；另外覆盖「没画框时不渲染批注卡片」「右边放不下时卡片翻到左边」「点框时卡片跟着跳」「卡片只留关闭按钮、框上不留按钮、回车插入一条并继续标注、编号递增」「插入后出现气泡、气泡能重新打开并改写草稿」「发送后气泡消失、剩余框补位」「气泡卡片的 ✕ 删掉气泡并清掉那一行」「图标落在刷新按钮后」「元素路径不进提示词」「只注册 overlay 槽」「按住回车只插一次」「多行批注压成一行」「面板消失时自动收尾」「源码里没有上一代的残留」。输出 `ok — 32 checks` 即通过。
 
 改动后自检顺序：`node --check client.js` → `node test/smoke.mjs` → 用 `plugin_manager` 重装（或 `set_bundle` 关再开）→ 刷新界面肉眼确认。
+
+### 发版
+
+市场按**固定提交**收录本插件（见 [issue #492](https://github.com/polang233/dsh-plugin-index/issues/492)），所以每次发版都要把新 SHA 回帖过去，否则条目还指着旧提交。一条命令做完：
+
+```bash
+GH_TOKEN=$(gh auth token) node scripts/release.mjs patch -m "fix: …"
+```
+
+它按顺序做：算新版本 → 跑 `node --check` 和冒烟测试（不过就中止）→ 改 `package.json`、README/DETAIL 里的旧版本号、README 的 `ok — N checks` → 通过 GitHub API 推整个目录（blob → tree → commit → 移动 `main`）→ 在 #492 回帖（版本 + 完整 SHA + `github:wuwen1994/dsh-annotate#<sha>` 安装目标）→ 打印结果并提醒重装本地 bundle。
+
+常用变体：
+
+```bash
+node scripts/release.mjs patch --dry-run      # 只演算，不写任何东西
+node scripts/release.mjs minor                # 0.12.x → 0.13.0
+node scripts/release.mjs --announce <sha>     # 只回帖（补发漏掉的通知）
+```
+
+`--no-push` / `--no-comment` 可分别跳过推送与回帖；`--force` 允许覆盖远端有而本地没有的文件（默认会中止并列出来）。
+
+这台机器 `github.com:443` 不通、只有 `api.github.com` 通，所以脚本一律走 REST，不依赖 `git push`。
 
 ## English
 
