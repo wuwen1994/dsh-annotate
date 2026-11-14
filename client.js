@@ -703,6 +703,31 @@ window.__ModuleLoader__.load({
     }
 
     /**
+     * Which beads still stand for a line in the draft. Returns null when nothing
+     * changed, so the caller can skip a render.
+     *
+     * A bead is dropped once its line is gone from the draft, but only after we
+     * have seen that line land there — otherwise the insert itself (which is
+     * asynchronous) would look like a send. While the prompt is on its way out
+     * every bead goes, even ones we never saw land.
+     */
+    function pruneBeads(entries, draft, phase) {
+      if (phase === 'submitting' || phase === 'sending') return entries.length ? [] : null
+      let touched = false
+      const next = []
+      for (const entry of entries) {
+        if (draft.includes(entry.line)) {
+          if (entry.seen) next.push(entry)
+          else { next.push({ ...entry, seen: true }); touched = true }
+          continue
+        }
+        if (!entry.seen) next.push(entry)
+        else touched = true
+      }
+      return touched ? next : null
+    }
+
+    /**
      * Write the crops and the prompt into a session's composer through the
      * conversation service, so no composer component has to be mounted by us.
      */
@@ -962,21 +987,14 @@ window.__ModuleLoader__.load({
         const timer = setInterval(() => {
           const services = composerFor(props && props.ctx ? props.ctx : {}, sessionId)
           if (!services || !services.input) return
+          let phase = ''
+          try {
+            const state = services.input.state.getSnapshot()
+            phase = state && state.phase ? state.phase : ''
+          } catch { phase = '' }
           const draft = readDraft(services)
-          let touched = false
-          const next = []
-          for (const entry of sent) {
-            if (draft.includes(entry.line)) {
-              if (entry.seen) next.push(entry)
-              else { next.push({ ...entry, seen: true }); touched = true }
-              continue
-            }
-            // Not in the draft yet: keep it until it was seen at least once, so
-            // the insert itself is never mistaken for a send.
-            if (!entry.seen) next.push(entry)
-            else touched = true
-          }
-          if (touched) setSent(next)
+          const next = pruneBeads(sent, draft, phase)
+          if (next) setSent(next)
         }, 900)
         return () => clearInterval(timer)
       }, [sent, sessionId])

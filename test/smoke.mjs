@@ -414,7 +414,7 @@ class FakeImage {
 }
 
 function makeComposer() {
-  const log = { drafted: [], attachments: [], inits: [], released: [], setDrafts: [], draft: '' }
+  const log = { drafted: [], attachments: [], inits: [], released: [], setDrafts: [], draft: '', phase: 'plain' }
   const conversation = {
     createDrafts(sessionId, files) {
       log.drafted.push({ sessionId, files })
@@ -423,7 +423,7 @@ function makeComposer() {
     releaseDraftAttachments(list) { log.released.push(list) },
     input: {
       for: () => ({
-        state: { getSnapshot: () => ({ draft: log.draft }) },
+        state: { getSnapshot: () => ({ draft: log.draft, phase: log.phase }) },
         setDraft(text) { log.setDrafts.push(text); log.draft = text },
         addAttachments(ids) { log.attachments.push(ids); return true },
         focus() {},
@@ -743,6 +743,40 @@ async function scenarioPage() {
     assert.ok(!find(scene.tree, (node) => node.props?.className === 'dwa-sheet'), 'the card survived the right click')
     assert.ok(find(scene.tree, (node) => node.props?.className === 'dwa-bubble'), 'the beads disappeared too early')
   })
+
+  // Sending is the only thing that retires the beads. The pruner runs on a timer,
+  // so the test grabs the interval callback instead of waiting for real seconds.
+  const realSetInterval = globalThis.setInterval
+  const realClearInterval = globalThis.clearInterval
+  let pruners = []
+  globalThis.setInterval = (callback) => { pruners.push(callback); return pruners.length }
+  globalThis.clearInterval = () => {}
+  try {
+    // Reopening a bead and saving re-registers the effect, which hands us a
+    // fresh pruner bound to the current beads.
+    find(scene.tree, (node) => node.props?.className === 'dwa-bubble').props.onClick({ preventDefault() {}, stopPropagation() {} })
+    await runtime.flush()
+    scene.tree = scene.mount()
+    find(scene.tree, (node) => node.type === 'textarea').props.onChange({ target: { value: '改成 hover 反而能看到' } })
+    await runtime.flush()
+    scene.tree = scene.mount()
+    find(scene.tree, (node) => node.type === 'textarea').props.onKeyDown({ key: 'Enter', shiftKey: false, preventDefault() {} })
+    await settle(runtime, scene.mount)
+    scene.tree = scene.mount()
+
+    assert.ok(pruners.length > 0, 'no pruner was registered')
+    log.phase = 'sending'
+    for (const prune of pruners) prune()
+    await runtime.flush()
+    scene.tree = scene.mount()
+
+    check('page: sending the prompt retires the beads', () => {
+      assert.equal(find(scene.tree, (node) => node.props?.className === 'dwa-bubble'), null, 'the beads outlived the send')
+    })
+  } finally {
+    globalThis.setInterval = realSetInterval
+    globalThis.clearInterval = realClearInterval
+  }
 
   check('page: no leftovers in the source', () => {
     for (const marker of ['dwa-entry', 'dwa-panel', 'dwa-backdrop', 'conversation.composer.dock', 'annotate/api', 'web-annotate']) {
