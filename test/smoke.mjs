@@ -414,18 +414,20 @@ class FakeImage {
 }
 
 function makeComposer() {
-  const log = { drafted: [], attachments: [], inits: [], released: [], setDrafts: [], draft: '', phase: 'plain' }
+  const log = { drafted: [], attachments: [], inits: [], released: [], setDrafts: [], removed: [], freed: [], draft: '', phase: 'plain' }
   const conversation = {
     createDrafts(sessionId, files) {
       log.drafted.push({ sessionId, files })
       return files.map((file, index) => ({ id: `draft-${log.drafted.length - 1}-${index}`, file }))
     },
     releaseDraftAttachments(list) { log.released.push(list) },
+    releaseDraftAttachment(id) { log.freed.push(id) },
     input: {
       for: () => ({
         state: { getSnapshot: () => ({ draft: log.draft, phase: log.phase }) },
         setDraft(text) { log.setDrafts.push(text); log.draft = text },
         addAttachments(ids) { log.attachments.push(ids); return true },
+        removeAttachment(id) { log.removed.push(id); return true },
         focus() {},
       }),
       requestDraftInitialization(binding, options) {
@@ -796,6 +798,13 @@ async function scenarioPage() {
     assert.ok(!written.includes(freshLine), 'the line stayed in the prompt')
   })
 
+  check('page: closing the bead takes its picture with it', () => {
+    const attached = log.attachments[log.attachments.length - 1]
+    assert.ok(Array.isArray(attached) && attached.length === 1, 'the bead never attached a crop')
+    assert.deepEqual(log.removed, attached, 'the crop is still in the composer')
+    assert.deepEqual(log.freed, attached, 'the draft attachment was never released')
+  })
+
   // A right click dismisses the whole annotation session; nothing stays marked.
   find(scene.tree, (node) => node.props?.className === 'dwa-freeze').props.onContextMenu({
     preventDefault() {},
@@ -809,6 +818,25 @@ async function scenarioPage() {
     assert.equal(webview.style.visibility, '', 'the page stayed frozen after a right click')
     assert.equal(find(scene.tree, (node) => node.props?.className === 'dwa-sheet'), null, 'the card survived the right click')
     assert.equal(find(scene.tree, (node) => node.props?.className === 'dwa-sb-box'), null, 'the regions survived the right click')
+  })
+
+  // Cancelling a session forgets the numbers too: the next region starts at 1.
+  find(scene.tree, (node) => node.type === 'button' && node.props?.className === 'dwa-tool').props.onClick({ preventDefault() {}, stopPropagation() {} })
+  await settle(runtime, scene.mount)
+  scene.tree = scene.mount()
+  const freshStage = find(scene.tree, (node) => node.props?.className === 'dwa-stage')
+  freshStage.props.onPointerDown({ button: 0, pointerId: 9, clientX: 320, clientY: 160, currentTarget: { setPointerCapture() {} } })
+  freshStage.props.onPointerMove({ clientX: 420, clientY: 250 })
+  freshStage.props.onPointerUp({ clientX: 420, clientY: 250 })
+  await settle(runtime, scene.mount)
+  scene.tree = scene.mount()
+
+  check('page: a new session numbers from 1 again', () => {
+    assert.deepEqual(
+      findAll(scene.tree, (node) => node.props?.className === 'dwa-sb-n').map(textOf),
+      ['1'],
+      'the number kept climbing after the session was cancelled',
+    )
   })
 
   check('page: no leftovers in the source', () => {

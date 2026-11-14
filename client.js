@@ -769,7 +769,8 @@ window.__ModuleLoader__.load({
             return { ok: false, code: 'busy' }
           }
           input.focus()
-          return { ok: true }
+          // The ids travel with the bead so removing it can take the picture too.
+          return { ok: true, ids }
         } catch {
           conversation.releaseDraftAttachments(drafts)
           return { ok: false, code: 'failed' }
@@ -1048,8 +1049,9 @@ window.__ModuleLoader__.load({
         const target = targetRef.current
         if (!source || !target) return
         const id = `b${Date.now().toString(36)}${Math.floor(Math.random() * 1000)}`
-        // Numbers keep climbing while the session lasts: a region inserted into
-        // the composer keeps its own number, so the next one must not reuse it.
+        // `order` only keeps the drawing order; the number a region shows is
+        // derived from what is still marked (see `layout`), so cancelling a
+        // session and starting over begins at 1 again.
         seqRef.current += 1
         const number = seqRef.current
         const order = number
@@ -1057,7 +1059,7 @@ window.__ModuleLoader__.load({
 
         if (source.kind === 'browser') {
           const box = { id, order, n: number, x: rect.x, y: rect.y, w: rect.w, h: rect.h, note: '', anchor: {} }
-          setBoxes((previous) => previous.concat(box))
+          renumber(sentRef.current, boxesRef.current.concat(box), null)
           setSelected(id)
           const viewRect = {
             left: target.rect.left + rect.x,
@@ -1093,7 +1095,7 @@ window.__ModuleLoader__.load({
               pageY = viewRect.top - pageRect.top
             }
           }
-          setBoxes((previous) => previous.concat({
+          const box = {
             id,
             order,
             n: number,
@@ -1105,7 +1107,8 @@ window.__ModuleLoader__.load({
             pageY,
             note: '',
             anchor: found,
-          }))
+          }
+          renumber(sentRef.current, boxesRef.current.concat(box), null)
           setSelected(id)
         }
 
@@ -1255,6 +1258,9 @@ window.__ModuleLoader__.load({
             live: shot.mode === 'live',
             left: pane ? pane.left : 0,
             top: pane ? pane.top : 0,
+            // Draft attachment ids: deleting the bead has to drop the picture as
+            // well, otherwise the crop stays attached to the prompt.
+            ids: Array.isArray(result.ids) ? result.ids : [],
           }
           // The inserted region leaves the picture; whatever is left renumbers,
           // including the line we just wrote if an older region is still open.
@@ -1386,6 +1392,15 @@ window.__ModuleLoader__.load({
         const entry = sent.find((item) => item.order === order)
         if (!entry) return
         renumber(sent.filter((item) => item.order !== order), boxes, entry.line)
+        // The line is gone, so its picture has to go too — otherwise the crop
+        // stays in the composer and gets sent with nothing pointing at it.
+        const services = composer()
+        if (services && services.input && Array.isArray(entry.ids)) {
+          for (const id of entry.ids) {
+            try { services.input.removeAttachment(id) } catch { /* already gone */ }
+            try { services.conversation.releaseDraftAttachment(id) } catch { /* already gone */ }
+          }
+        }
         setEditing(null)
       }
 
