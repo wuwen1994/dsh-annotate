@@ -725,33 +725,6 @@ async function scenarioPage() {
     assert.ok(find(scene.tree, (node) => node.props?.className === 'dwa-bubble'), 'the beads disappeared after an edit')
   })
 
-  find(scene.tree, (node) => node.props?.className === 'dwa-bubble').props.onClick({ preventDefault() {}, stopPropagation() {} })
-  await runtime.flush()
-  scene.tree = scene.mount()
-  find(scene.tree, (node) => node.props?.className === 'dwa-x').props.onClick()
-  await runtime.flush()
-  scene.tree = scene.mount()
-
-  check('page: closing the card keeps the beads', () => {
-    assert.ok(!find(scene.tree, (node) => node.props?.className === 'dwa-sheet'), 'the card stayed open')
-    assert.ok(find(scene.tree, (node) => node.props?.className === 'dwa-bubble'), 'closing the card dropped the beads')
-  })
-
-  // A right click dismisses the whole annotation session.
-  find(scene.tree, (node) => node.props?.className === 'dwa-freeze').props.onContextMenu({
-    preventDefault() {},
-    stopPropagation() {},
-  })
-  await runtime.flush()
-  scene.tree = scene.mount()
-
-  check('page: a right click leaves the marking mode, beads stay', () => {
-    assert.equal(find(scene.tree, (node) => node.props?.className === 'dwa-freeze'), null, 'the overlay stayed open')
-    assert.equal(webview.style.visibility, '', 'the page stayed frozen after a right click')
-    assert.ok(!find(scene.tree, (node) => node.props?.className === 'dwa-sheet'), 'the card survived the right click')
-    assert.ok(find(scene.tree, (node) => node.props?.className === 'dwa-bubble'), 'the beads disappeared too early')
-  })
-
   // Sending is the only thing that retires the beads. The pruner runs on a timer,
   // so the test grabs the interval callback instead of waiting for real seconds.
   const realSetInterval = globalThis.setInterval
@@ -763,9 +736,6 @@ async function scenarioPage() {
     // Reopening a bead and saving re-registers the effect, which hands us a
     // fresh pruner bound to the current beads.
     find(scene.tree, (node) => node.props?.className === 'dwa-bubble').props.onClick({ preventDefault() {}, stopPropagation() {} })
-    await runtime.flush()
-    scene.tree = scene.mount()
-    find(scene.tree, (node) => node.type === 'textarea').props.onChange({ target: { value: '改成 hover 反而能看到' } })
     await runtime.flush()
     scene.tree = scene.mount()
     find(scene.tree, (node) => node.type === 'textarea').props.onKeyDown({ key: 'Enter', shiftKey: false, preventDefault() {} })
@@ -781,10 +751,65 @@ async function scenarioPage() {
     check('page: sending the prompt retires the beads', () => {
       assert.equal(find(scene.tree, (node) => node.props?.className === 'dwa-bubble'), null, 'the beads outlived the send')
     })
+
+    check('page: the regions still open close the numbering gap', () => {
+      assert.deepEqual(
+        findAll(scene.tree, (node) => node.props?.className === 'dwa-sb-n').map(textOf),
+        ['1', '2'],
+        'the live regions kept their old numbers',
+      )
+    })
   } finally {
     globalThis.setInterval = realSetInterval
     globalThis.clearInterval = realClearInterval
   }
+
+  log.phase = 'plain'
+
+  // An open region can be inserted again, and that bead takes number 1 because
+  // it is the only thing marked so far.
+  find(scene.tree, (node) => node.props?.className === 'dwa-sb-box').props.onClick({ preventDefault() {}, stopPropagation() {} })
+  await runtime.flush()
+  scene.tree = scene.mount()
+  find(scene.tree, (node) => node.type === 'textarea').props.onKeyDown({ key: 'Enter', shiftKey: false, preventDefault() {} })
+  await settle(runtime, scene.mount)
+  scene.tree = scene.mount()
+  const freshLine = log.inits[log.inits.length - 1].prompt
+
+  check('page: a fresh bead starts again at 1', () => {
+    const bubble = find(scene.tree, (node) => node.props?.className === 'dwa-bubble')
+    assert.ok(bubble, 'no bead was created')
+    assert.equal(bubble.children[0], '1', 'the bead number ignored the live count')
+  })
+
+  find(scene.tree, (node) => node.props?.className === 'dwa-bubble').props.onClick({ preventDefault() {}, stopPropagation() {} })
+  await runtime.flush()
+  scene.tree = scene.mount()
+  find(scene.tree, (node) => node.props?.className === 'dwa-x').props.onClick()
+  await runtime.flush()
+  scene.tree = scene.mount()
+
+  check('page: closing the bead deletes it and its line', () => {
+    assert.equal(find(scene.tree, (node) => node.props?.className === 'dwa-bubble'), null, 'the bead survived its own close button')
+    const written = log.setDrafts[log.setDrafts.length - 1]
+    assert.ok(typeof written === 'string', 'the draft was never rewritten')
+    assert.ok(!written.includes(freshLine), 'the line stayed in the prompt')
+  })
+
+  // A right click dismisses the whole annotation session; nothing stays marked.
+  find(scene.tree, (node) => node.props?.className === 'dwa-freeze').props.onContextMenu({
+    preventDefault() {},
+    stopPropagation() {},
+  })
+  await runtime.flush()
+  scene.tree = scene.mount()
+
+  check('page: a right click leaves the marking mode', () => {
+    assert.equal(find(scene.tree, (node) => node.props?.className === 'dwa-freeze'), null, 'the overlay stayed open')
+    assert.equal(webview.style.visibility, '', 'the page stayed frozen after a right click')
+    assert.equal(find(scene.tree, (node) => node.props?.className === 'dwa-sheet'), null, 'the card survived the right click')
+    assert.equal(find(scene.tree, (node) => node.props?.className === 'dwa-sb-box'), null, 'the regions survived the right click')
+  })
 
   check('page: no leftovers in the source', () => {
     for (const marker of ['dwa-entry', 'dwa-panel', 'dwa-backdrop', 'conversation.composer.dock', 'annotate/api', 'web-annotate']) {

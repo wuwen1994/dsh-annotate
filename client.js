@@ -813,6 +813,7 @@ window.__ModuleLoader__.load({
       const slotRef = useRef(null)
       const seqRef = useRef(0)
       const sentRef = useRef([])
+      const boxesRef = useRef([])
       const [slotHost, setSlotHost] = useState(null)
 
       // Keep one placeholder inside the pane's own toolbar, so the icon sits
@@ -875,7 +876,9 @@ window.__ModuleLoader__.load({
         shotRef.current = null
         targetRef.current = null
         setShot(null)
-        setBoxes([])
+        // The regions that were never inserted are gone, so the beads renumber.
+        if (renumberRef.current) renumberRef.current(sentRef.current, [], null)
+        else setBoxes([])
         setEditing(null)
         setSelected(null)
         setDragging(null)
@@ -1001,7 +1004,9 @@ window.__ModuleLoader__.load({
           } catch { phase = '' }
           const draft = readDraft(services)
           const next = pruneBeads(sent, draft, phase)
-          if (next) setSent(next)
+          // Dropping a bead frees its number, so the live regions close the gap
+          // and the drafted lines get rewritten to match.
+          if (next) renumberRef.current(next, boxesRef.current, null)
         }, 900)
         return () => clearInterval(timer)
       }, [sent, sessionId])
@@ -1047,10 +1052,11 @@ window.__ModuleLoader__.load({
         // the composer keeps its own number, so the next one must not reuse it.
         seqRef.current += 1
         const number = seqRef.current
+        const order = number
         setEditing(null)
 
         if (source.kind === 'browser') {
-          const box = { id, n: number, x: rect.x, y: rect.y, w: rect.w, h: rect.h, note: '', anchor: {} }
+          const box = { id, order, n: number, x: rect.x, y: rect.y, w: rect.w, h: rect.h, note: '', anchor: {} }
           setBoxes((previous) => previous.concat(box))
           setSelected(id)
           const viewRect = {
@@ -1089,6 +1095,7 @@ window.__ModuleLoader__.load({
           }
           setBoxes((previous) => previous.concat({
             id,
+            order,
             n: number,
             x: rect.x + current.x,
             y: rect.y + current.y,
@@ -1121,17 +1128,73 @@ window.__ModuleLoader__.load({
         setBoxes((previous) => previous.map((box) => (box.id === id ? { ...box, note } : box)))
       }
 
-      const updateSentNote = (number, note) => {
-        setSent((previous) => previous.map((entry) => (entry.n === number ? { ...entry, note } : entry)))
+      const updateSentNote = (order, note) => {
+        setSent((previous) => previous.map((entry) => (entry.order === order ? { ...entry, note } : entry)))
       }
 
       const removeBox = (id) => {
-        setBoxes((previous) => previous.filter((box) => box.id !== id))
+        const rest = boxes.filter((box) => box.id !== id)
         setSelected((current) => (current === id ? null : current))
+        // A live region just went away, so the beads after it move up a number.
+        renumber(sent, rest, null)
       }
 
       /** Composer services for the session on screen, or null. */
       const composer = () => composerFor(props && props.ctx ? props.ctx : {}, sessionId)
+
+      // Live regions, numbered 1..n in the order they were drawn. A bead counts
+      // only while it is still on the page, so numbers never skip: deleting the
+      // first of three leaves 1 and 2, not 2 and 3.
+      const layout = (sentList, boxList) => {
+        const items = []
+        for (const entry of sentList) items.push({ kind: 'sent', order: entry.order, value: entry })
+        for (const box of boxList) items.push({ kind: 'box', order: box.order, value: box })
+        items.sort((left, right) => left.order - right.order)
+        const nextSent = []
+        const nextBoxes = []
+        const renames = []
+        items.forEach((item, index) => {
+          const n = index + 1
+          if (item.kind === 'sent') {
+            const line = item.value.n === n
+              ? item.value.line
+              : buildLine(t, { ...item.value.box, note: item.value.note }, item.value.source, n)
+            if (line !== item.value.line) renames.push({ from: item.value.line, to: line })
+            nextSent.push({ ...item.value, n, line })
+          } else {
+            nextBoxes.push(item.value.n === n ? item.value : { ...item.value, n })
+          }
+        })
+        return { sent: nextSent, boxes: nextBoxes, renames }
+      }
+
+      /**
+       * Apply a layout and keep the composer in step: the line of a removed bead
+       * goes away, and any line whose number changed is rewritten in place.
+       */
+      const applyLayout = (next, removedLine) => {
+        setSent(next.sent)
+        setBoxes(next.boxes)
+        if (!next.renames.length && !removedLine) return
+        const services = composer()
+        if (!services || !services.input) return
+        const before = readDraft(services)
+        let draft = before
+        if (removedLine) {
+          draft = draft.split('\n').filter((line) => line.trim() !== removedLine.trim()).join('\n')
+        }
+        for (const change of next.renames) draft = draft.split(change.from).join(change.to)
+        // Nothing to rewrite means the line was already sent (or edited away):
+        // touching the draft then would just move the caret around.
+        if (draft === before) return
+        try { services.input.setDraft(draft) } catch { /* composer is busy */ }
+      }
+
+      const renumber = (sentList, boxList, removedLine) => applyLayout(layout(sentList, boxList), removedLine)
+      const renumberRef = useRef(null)
+      renumberRef.current = renumber
+      sentRef.current = sent
+      boxesRef.current = boxes
 
       /** Where a committed region sits in the viewport right now. */
       const bubblePoint = (entry) => {
@@ -1180,7 +1243,8 @@ window.__ModuleLoader__.load({
             return
           }
           const pane = anchor
-          setSent((previous) => previous.concat({
+          const entry = {
+            order: box.order,
             n: box.n,
             note: box.note,
             line: text,
@@ -1191,8 +1255,10 @@ window.__ModuleLoader__.load({
             live: shot.mode === 'live',
             left: pane ? pane.left : 0,
             top: pane ? pane.top : 0,
-          }))
-          setBoxes((previous) => previous.filter((item) => item.id !== box.id))
+          }
+          // The inserted region leaves the picture; whatever is left renumbers,
+          // including the line we just wrote if an older region is still open.
+          renumber(sent.concat(entry), boxes.filter((item) => item.id !== box.id), null)
           setSelected(null)
         } catch (cause) {
           setError(t('errCrop', { msg: (cause && cause.message) || 'unknown' }))
@@ -1209,7 +1275,7 @@ window.__ModuleLoader__.load({
        */
       const commitEdit = async () => {
         if (editing === null) return
-        const entry = sent.find((item) => item.n === editing)
+        const entry = sent.find((item) => item.order === editing)
         if (!entry || !sessionId) {
           setEditing(null)
           return
@@ -1233,7 +1299,7 @@ window.__ModuleLoader__.load({
               })
             }
           }
-          setSent((previous) => previous.map((item) => (item.n === entry.n ? { ...item, line: next } : item)))
+          setSent((previous) => previous.map((item) => (item.order === entry.order ? { ...item, line: next } : item)))
         } catch (cause) {
           setError(t('errCrop', { msg: (cause && cause.message) || 'unknown' }))
         } finally {
@@ -1243,24 +1309,24 @@ window.__ModuleLoader__.load({
       }
 
       const selectedBox = selected ? boxes.find((box) => box.id === selected) ?? null : null
-      const editingEntry = editing === null ? null : sent.find((item) => item.n === editing) ?? null
+      const editingEntry = editing === null ? null : sent.find((item) => item.order === editing) ?? null
 
       // Beads stay on the page (also after the overlay closes) until the whole
       // draft goes out, so a note can always be found and edited again.
       const beads = sent.map((entry) => {
         const point = bubblePoint(entry)
         return el('button', {
-          key: `bead-${entry.n}`,
+          key: `bead-${entry.order}`,
           type: 'button',
           className: 'dwa-bubble',
-          'data-editing': editing === entry.n ? '1' : '0',
+          'data-editing': editing === entry.order ? '1' : '0',
           title: entry.note || t('bubbleHint'),
           style: { left: `${Math.round(point.x)}px`, top: `${Math.round(point.y)}px` },
           onPointerDown: (event) => event.stopPropagation(),
           onClick: (event) => {
             event.preventDefault()
             event.stopPropagation()
-            setEditing(entry.n)
+            setEditing(entry.order)
             setSelected(null)
           },
         }, String(entry.n))
@@ -1277,11 +1343,11 @@ window.__ModuleLoader__.load({
       const noteEditor = () => {
         if (editingEntry) {
           return el('textarea', {
-            key: `edit-${editingEntry.n}`,
+            key: `edit-${editingEntry.order}`,
             value: editingEntry.note,
             placeholder: busy ? t('sbInserting') : t('notePlaceholder'),
             readOnly: busy,
-            onChange: (event) => updateSentNote(editingEntry.n, event.target.value),
+            onChange: (event) => updateSentNote(editingEntry.order, event.target.value),
             onKeyDown: (event) => {
               if (event.key !== 'Enter' || event.shiftKey || event.isComposing) return
               if (event.nativeEvent && event.nativeEvent.isComposing) return
@@ -1312,9 +1378,22 @@ window.__ModuleLoader__.load({
         })
       }
 
+      /**
+       * Drop a bead and its line from the composer. The rest renumber, so the
+       * numbering keeps matching what is actually on the page (and in the draft).
+       */
+      const deleteBead = (order) => {
+        const entry = sent.find((item) => item.order === order)
+        if (!entry) return
+        renumber(sent.filter((item) => item.order !== order), boxes, entry.line)
+        setEditing(null)
+      }
+
       const closeCard = () => {
+        // Closing the card of an inserted region means "I don't want this one":
+        // the bead goes away together with the line it put in the composer.
         if (editing !== null) {
-          setEditing(null)
+          deleteBead(editing)
           return
         }
         cancel()
