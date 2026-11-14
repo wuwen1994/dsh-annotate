@@ -1,6 +1,6 @@
 {
   "name": "dsh-annotate",
-  "version": "0.9.1",
+  "version": "0.10.0",
   "private": true,
   "type": "module",
   "description": "Annotate regions on whatever the DeepSeek Harness sidebar is showing — a web page, PDF, Markdown, txt, code or image — and send crops plus a located prompt to the composer.",

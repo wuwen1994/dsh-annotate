@@ -414,7 +414,7 @@ class FakeImage {
 }
 
 function makeComposer() {
-  const log = { drafted: [], attachments: [], inits: [], released: [] }
+  const log = { drafted: [], attachments: [], inits: [], released: [], setDrafts: [], draft: '' }
   const conversation = {
     createDrafts(sessionId, files) {
       log.drafted.push({ sessionId, files })
@@ -423,10 +423,16 @@ function makeComposer() {
     releaseDraftAttachments(list) { log.released.push(list) },
     input: {
       for: () => ({
+        state: { getSnapshot: () => ({ draft: log.draft }) },
+        setDraft(text) { log.setDrafts.push(text); log.draft = text },
         addAttachments(ids) { log.attachments.push(ids); return true },
         focus() {},
       }),
-      requestDraftInitialization(binding, options) { log.inits.push(options); return 'applied' },
+      requestDraftInitialization(binding, options) {
+        log.inits.push(options)
+        log.draft = log.draft ? `${log.draft}\n${options.prompt}` : options.prompt
+        return 'applied'
+      },
     },
   }
   const binding = {
@@ -556,7 +562,9 @@ async function scenarioPage() {
     const box = find(scene.tree, (node) => node.props?.className === 'dwa-sb-box')
     assert.ok(box, 'no box drawn')
     assert.equal(box.props.style.width, `${(100 / 1020) * 100}%`)
-    assert.ok(find(scene.tree, (node) => node.props?.className === 'dwa-chip'), 'no numbered chip')
+    assert.equal(textOf(find(scene.tree, (node) => node.props?.className === 'dwa-sb-n')), '1', 'the region lost its number')
+    // Numbers live on the region only: the card itself is unnumbered.
+    assert.equal(find(scene.tree, (node) => node.props?.className === 'dwa-chip'), null, 'a numbered chip came back')
   })
 
   check('page: the editor appears only after the first region', () => {
@@ -587,8 +595,8 @@ async function scenarioPage() {
     assert.ok(left >= 0, 'editor runs off the window')
   })
 
-  // Selecting the first chip brings the editor back next to that region.
-  find(scene.tree, (node) => node.props?.className === 'dwa-chip').props.onClick()
+  // Clicking the first region brings the editor back next to it.
+  find(scene.tree, (node) => node.props?.className === 'dwa-sb-box').props.onClick({ stopPropagation() {} })
   await runtime.flush()
   scene.tree = scene.mount()
 
@@ -596,18 +604,18 @@ async function scenarioPage() {
     const sheet = find(scene.tree, (node) => node.props?.className === 'dwa-sheet')
     const left = Number.parseFloat(sheet.props.style.left)
     assert.ok(left >= 420 && left <= 460, `editor did not follow the selection: ${left}`)
-    const chip = find(scene.tree, (node) => node.props?.className === 'dwa-chip')
-    assert.equal(chip.props['data-selected'], '1')
+    const box = find(scene.tree, (node) => node.props?.className === 'dwa-sb-box')
+    assert.equal(box.props['data-selected'], '1')
   })
 
-  check('page: the card keeps only chips and a close button', () => {
+  check('page: the card keeps only a close button', () => {
     assert.ok(!find(scene.tree, (node) => node.props?.className === 'dwa-sheet-hint'), 'the hint line came back')
     assert.ok(find(scene.tree, (node) => node.props?.className === 'dwa-sheet-bar'), 'no card bar')
     assert.ok(find(scene.tree, (node) => node.props?.className === 'dwa-x'), 'no close button')
     // The locator is recorded for the prompt, never shown in the card.
     assert.equal(find(scene.tree, (node) => node.props?.className === 'dwa-anchor'), null, 'the locator strip came back')
-    // Deleting a region moved to the keyboard; the region paints nothing but
-    // its number now.
+    // Numbers live on the regions; the card carries none of them.
+    assert.equal(find(scene.tree, (node) => node.props?.className === 'dwa-chip'), null, 'a numbered chip came back')
     const badges = findAll(scene.tree, (node) => node.props?.className === 'dwa-sb-del')
     assert.equal(badges.length, 0, 'the region still paints a close badge')
     const insertButtons = findAll(scene.tree, (node) => node.type === 'button' && node.props?.className === 'dwa-btn')
@@ -620,7 +628,8 @@ async function scenarioPage() {
   await runtime.flush()
   scene.tree = scene.mount()
 
-  // Enter in the note box inserts — there is no button to click.
+  // Enter in the note box inserts the selected region — there is no button to
+  // click, and the session stays open for the next one.
   find(scene.tree, (node) => node.type === 'textarea').props.onKeyDown({
     key: 'Enter',
     shiftKey: false,
@@ -629,32 +638,98 @@ async function scenarioPage() {
   await settle(runtime, scene.mount)
   scene.tree = scene.mount()
 
-  check('page: crop reaches the composer', () => {
+  check('page: the selected region is cropped into the composer', () => {
     assert.ok(canvasLog.length >= 1, 'the crop canvas was never built')
     assert.equal(canvasLog[0].width, 82, 'crop width ignores the capture scale')
     assert.equal(canvasLog[0].height, 74, 'crop height ignores the capture scale')
     assert.equal(log.drafted.length, 1, 'createDrafts was not called')
     const files = log.drafted[0].files
-    assert.equal(files.length, 2, 'both regions should be cropped')
+    assert.equal(files.length, 1, 'only the region that was inserted should be cropped')
     assert.match(files[0].name, /^page-1-.*\.png$/)
-    assert.match(files[1].name, /^page-2-.*\.png$/)
     assert.equal(log.inits.length, 1)
     assert.equal(log.inits[0].whenDraftExists, 'append')
-    assert.match(log.inits[0].prompt, /我在页面 http:\/\/127\.0\.0\.1:8799\/third 上标了 2 处/)
+    // One line, no header and no trailer around it.
+    assert.match(log.inits[0].prompt, /^1\. /, `the line lost its number: ${log.inits[0].prompt}`)
+    assert.ok(!log.inits[0].prompt.includes('我在页面'), 'the header came back')
+    assert.ok(!log.inits[0].prompt.includes('定位以引号里的文字为准'), 'the trailer came back')
     assert.match(log.inits[0].prompt, /这个按钮在右键菜单里点不到/)
     assert.match(log.inits[0].prompt, /提交订单/, 'the heading anchor went missing')
     assert.ok(!log.inits[0].prompt.includes('div#app'), 'the element path leaked into the prompt')
     assert.ok(!log.inits[0].prompt.includes('> 区域'), 'the element path leaked into the prompt')
-    assert.deepEqual(log.attachments, [['draft-0-0', 'draft-0-1']])
-    assert.equal(webview.style.visibility, '', 'the page stayed frozen after inserting')
+    assert.deepEqual(log.attachments, [['draft-0-0']])
     assert.equal(log.released.length, 0)
   })
 
-  // A right click dismisses the whole annotation session.
-  const again = find(scene.tree, (node) => node.type === 'button' && node.props?.className === 'dwa-tool')
-  again.props.onClick({ preventDefault() {}, stopPropagation() {} })
+  check('page: a bead marks what went in, and marking goes on', () => {
+    assert.equal(webview.style.visibility, 'hidden', 'the overlay closed after inserting')
+    assert.ok(find(scene.tree, (node) => node.props?.className === 'dwa-freeze'), 'the overlay closed after inserting')
+    const bead = find(scene.tree, (node) => node.props?.className === 'dwa-bubble')
+    assert.ok(bead, 'no bead for the inserted region')
+    assert.equal(textOf(bead), '1', 'the bead lost its number')
+    // The editor steps aside so the next region can be drawn right away.
+    assert.equal(find(scene.tree, (node) => node.type === 'textarea'), null, 'the card stayed over the picture')
+    // The inserted region left the picture; the other one is still waiting for
+    // its own note.
+    const numbers = findAll(scene.tree, (node) => node.props?.className === 'dwa-sb-n').map(textOf)
+    assert.deepEqual(numbers, ['2'], `the inserted region kept its box: ${numbers.join(',')}`)
+  })
+
+  // The next region keeps climbing instead of starting over at 1.
+  stageNode.props.onPointerDown({ button: 0, pointerId: 3, clientX: 700, clientY: 400, currentTarget: { setPointerCapture() {} } })
+  stageNode.props.onPointerMove({ clientX: 780, clientY: 470 })
+  stageNode.props.onPointerUp({ clientX: 780, clientY: 470 })
   await settle(runtime, scene.mount)
   scene.tree = scene.mount()
+
+  check('page: numbering keeps climbing after an insert', () => {
+    const numbers = findAll(scene.tree, (node) => node.props?.className === 'dwa-sb-n').map(textOf)
+    assert.equal(numbers[numbers.length - 1], '3', `the new region should be 3, got ${numbers.join(',')}`)
+  })
+
+  // Tapping the bead reopens the note it came with.
+  find(scene.tree, (node) => node.props?.className === 'dwa-bubble').props.onClick({ preventDefault() {}, stopPropagation() {} })
+  await runtime.flush()
+  scene.tree = scene.mount()
+
+  check('page: a bead reopens its note for a second edit', () => {
+    const editor = find(scene.tree, (node) => node.type === 'textarea')
+    assert.ok(editor, 'the bead did not reopen the editor')
+    assert.equal(editor.props.value, '这个按钮在右键菜单里点不到')
+  })
+
+  find(scene.tree, (node) => node.type === 'textarea').props.onChange({ target: { value: '这个按钮在右键菜单里点不到，改成 hover 反而能看到' } })
+  await runtime.flush()
+  scene.tree = scene.mount()
+  find(scene.tree, (node) => node.type === 'textarea').props.onKeyDown({ key: 'Enter', shiftKey: false, preventDefault() {} })
+  await settle(runtime, scene.mount)
+  scene.tree = scene.mount()
+
+  check('page: the second edit rewrites the drafted line', () => {
+    assert.equal(log.setDrafts.length, 1, 'the draft was not rewritten')
+    assert.match(log.setDrafts[0], /改成 hover 反而能看到/)
+    assert.ok(!log.setDrafts[0].includes('这个按钮在右键菜单里点不到 ·'), 'the old line survived')
+    assert.ok(log.draft.includes('改成 hover 反而能看到'), 'the fake draft never received the edit')
+  })
+
+  check('page: the card closes but the beads stay', () => {
+    // Enter closed the editor; reopening from the bead closes again with ✕.
+    assert.equal(find(scene.tree, (node) => node.props?.className === 'dwa-sheet'), null, 'the editor stayed open after a second edit')
+    assert.ok(find(scene.tree, (node) => node.props?.className === 'dwa-bubble'), 'the beads disappeared after an edit')
+  })
+
+  find(scene.tree, (node) => node.props?.className === 'dwa-bubble').props.onClick({ preventDefault() {}, stopPropagation() {} })
+  await runtime.flush()
+  scene.tree = scene.mount()
+  find(scene.tree, (node) => node.props?.className === 'dwa-x').props.onClick()
+  await runtime.flush()
+  scene.tree = scene.mount()
+
+  check('page: closing the card keeps the beads', () => {
+    assert.ok(!find(scene.tree, (node) => node.props?.className === 'dwa-sheet'), 'the card stayed open')
+    assert.ok(find(scene.tree, (node) => node.props?.className === 'dwa-bubble'), 'closing the card dropped the beads')
+  })
+
+  // A right click dismisses the whole annotation session.
   find(scene.tree, (node) => node.props?.className === 'dwa-freeze').props.onContextMenu({
     preventDefault() {},
     stopPropagation() {},
@@ -662,10 +737,11 @@ async function scenarioPage() {
   await runtime.flush()
   scene.tree = scene.mount()
 
-  check('page: a right click leaves the marking mode', () => {
+  check('page: a right click leaves the marking mode, beads stay', () => {
     assert.equal(find(scene.tree, (node) => node.props?.className === 'dwa-freeze'), null, 'the overlay stayed open')
     assert.equal(webview.style.visibility, '', 'the page stayed frozen after a right click')
     assert.ok(!find(scene.tree, (node) => node.props?.className === 'dwa-sheet'), 'the card survived the right click')
+    assert.ok(find(scene.tree, (node) => node.props?.className === 'dwa-bubble'), 'the beads disappeared too early')
   })
 
   check('page: no leftovers in the source', () => {
@@ -741,11 +817,13 @@ async function scenarioText() {
     assert.equal(log.drafted[0].files.length, 0, 'a text document should not ship a screenshot')
     assert.equal(log.inits.length, 1)
     const prompt = log.inits[0].prompt
-    assert.match(prompt, /「notes\/a\.txt」/)
+    assert.match(prompt, /^1\. notes\/a\.txt · /, `the line lost its file: ${prompt}`)
     assert.match(prompt, /第 \d+–\d+ 行|第 \d+ 行/, `no line range in prompt: ${prompt}`)
     assert.match(prompt, /缓存失效/)
     assert.match(prompt, /这句说的缓存问题要写清楚什么时候失效/)
-    assert.match(prompt, /定位以引号里的文字为准/)
+    // No header and no trailer around the line any more.
+    assert.ok(!prompt.includes('我在'), 'the header came back')
+    assert.ok(!prompt.includes('定位以引号里的文字为准'), 'the trailer came back')
     assert.deepEqual(log.attachments, [[]], 'no attachments expected for a text document')
   })
 }
@@ -816,7 +894,7 @@ async function scenarioPdf() {
     assert.equal(log.drafted[0].files.length, 1, 'expected one crop')
     assert.match(log.drafted[0].files[0].name, /^page-1-.*\.png$/)
     const prompt = log.inits[0].prompt
-    assert.match(prompt, /「docs\/guide\.pdf」/)
+    assert.match(prompt, /^1\. docs\/guide\.pdf · /)
     assert.match(prompt, /第 2\/3 页/)
     assert.match(prompt, /缓存失效策略/)
     assert.match(prompt, /这一节的标题要改/)
@@ -873,7 +951,7 @@ async function scenarioImage() {
     assert.equal(canvasLog[0].width, 400, 'crop width ignores the 2x natural scale')
     assert.equal(log.drafted[0].files.length, 1)
     const prompt = log.inits[0].prompt
-    assert.match(prompt, /「assets\/wide\.png」/)
+    assert.match(prompt, /^1\. assets\/wide\.png · /)
     assert.match(prompt, /这张图的右侧留白太多/)
     assert.doesNotMatch(prompt, /这个文件/, 'a bare "this file" label is noise')
   })

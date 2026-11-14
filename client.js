@@ -38,12 +38,7 @@ window.__ModuleLoader__.load({
       sbNoPage: '右侧栏里还没有打开的网页或文件。',
       sbNoCapture: '当前环境不支持网页截图。',
       sbInserting: '正在插入…',
-      sbPromptHeader: '我在页面 {url} 上标了 {n} 处，编号与附图一致（每张附图是对应区域的截图）：',
-      sbPromptNoUrl: '我在右侧栏的页面截图里标了 {n} 处，编号与附图一致（每张附图是对应区域的截图）：',
-      sbPromptDoc: '我在「{path}」里标了 {n} 处，编号与附图一致（每张附图是对应区域的截图）：',
-      sbPromptDocNoImage: '我在「{path}」里标了 {n} 处，每条都带定位信息和被标注的文字：',
-      sbPromptCheck: '（定位以引号里的文字为准：页码/行号对不上时，请先按这段文字在文件里定位，再作答。）',
-      sbUntitled: '这个文件',
+      bubbleHint: '点开编辑这条批注',
       sbAnchorPage: '第 {page}/{total} 页',
       sbAnchorPageSolo: '第 {page} 页',
       sbAnchorLines: '第 {from}–{to} 行',
@@ -69,12 +64,7 @@ window.__ModuleLoader__.load({
       sbNoPage: 'The sidebar is not showing a page or a file.',
       sbNoCapture: 'This environment cannot capture the page.',
       sbInserting: 'Inserting…',
-      sbPromptHeader: 'I marked {n} place(s) on {url}; the numbers match the attached images (each image is a crop of that region):',
-      sbPromptNoUrl: 'I marked {n} place(s) on the sidebar screenshot; the numbers match the attached images:',
-      sbPromptDoc: 'I marked {n} place(s) in "{path}"; the numbers match the attached images (each image is a crop of that region):',
-      sbPromptDocNoImage: 'I marked {n} place(s) in "{path}"; each line names where it is and quotes the marked text:',
-      sbPromptCheck: '(Trust the quoted text for locating: if the page or line number does not match, find that text in the file first.)',
-      sbUntitled: 'this file',
+      bubbleHint: 'Open this note again',
       sbAnchorPage: 'page {page}/{total}',
       sbAnchorPageSolo: 'page {page}',
       sbAnchorLines: 'lines {from}–{to}',
@@ -183,9 +173,13 @@ window.__ModuleLoader__.load({
         border: 1px solid var(--dsw-alias-border-l1, rgba(0,0,0,.1)); box-shadow: 0 10px 30px rgba(0,0,0,.28); }
       .dwa-sheet[data-compact='1'] { padding: 6px 8px; }
       .dwa-sheet-bar { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
-      .dwa-chip { min-width: 22px; height: 22px; padding: 0 6px; border-radius: 999px; border: 1px solid var(--dsw-alias-border-l2, rgba(0,0,0,.14));
-        background: transparent; color: var(--dsw-alias-label-secondary, #4a4f57); font: inherit; font-size: 12px; cursor: pointer; }
-      .dwa-chip[data-selected='1'] { background: var(--dsw-alias-brand-primary, #2f6fed); border-color: transparent; color: #fff; }
+      /* Left behind on the page after Enter: a glass bead that reopens its note. */
+      .dwa-bubble { position: fixed; z-index: 1402; min-width: 22px; height: 22px; padding: 0 7px; border: 1px solid rgba(255,255,255,.42);
+        border-radius: 999px; background: rgba(38,94,214,.82); color: #fff; font: inherit; font-size: 12px; font-weight: 600; line-height: 20px;
+        text-align: center; cursor: pointer; backdrop-filter: blur(6px) saturate(1.5); -webkit-backdrop-filter: blur(6px) saturate(1.5);
+        box-shadow: 0 2px 10px rgba(24,60,140,.32), inset 0 1px 0 rgba(255,255,255,.35); transform: translate(-50%, -50%); }
+      .dwa-bubble:hover { background: rgba(38,94,214,.95); }
+      .dwa-bubble[data-editing='1'] { box-shadow: 0 0 0 2px rgba(255,255,255,.9), 0 2px 10px rgba(24,60,140,.32); }
       .dwa-sheet textarea { width: 100%; box-sizing: border-box; min-height: 44px; max-height: 96px; resize: vertical; padding: 6px 8px;
         font: inherit; font-size: 13px; color: var(--dsw-alias-label-primary, #111); background: var(--dsw-alias-bg-l1, rgba(127,127,127,.06));
         border: 1px solid var(--dsw-alias-border-l2, rgba(0,0,0,.12)); border-radius: var(--dsw-radius-sm, 6px); outline: none; }
@@ -642,24 +636,22 @@ window.__ModuleLoader__.load({
       return parts.join(' · ')
     }
 
-    function buildPrompt(t, boxes, source) {
-      const count = boxes.length
-      let header
-      if (source.kind === 'browser') {
-        header = source.url ? t('sbPromptHeader', { url: source.url, n: count }) : t('sbPromptNoUrl', { n: count })
-      } else {
-        const path = source.path ? shrink(source.path, 120) : t('sbUntitled')
-        header = source.images ? t('sbPromptDoc', { path, n: count }) : t('sbPromptDocNoImage', { path, n: count })
-      }
-      const lines = boxes.map((box, index) => {
-        // The element path is a debugging aid, not something worth showing to
-        // the model (or the user): the position word plus the quoted text is
-        // what actually locates a region on a page.
-        const where = locator(t, box, source, { element: false })
-        const note = box.note && box.note.trim() ? box.note.trim() : t('promptNoNote')
-        return `${index + 1}. ${where ? `${where} · ` : ''}${note}`
-      })
-      return [header, ...lines, '', t('sbPromptCheck')].join('\n')
+    /**
+     * One line per region, nothing else: the model reads the crops in the same
+     * order, so a header ("I marked N spots…") and a trailer ("locate by the
+     * quoted text…") only add noise to every single message.
+     */
+    function buildLine(t, box, source, number) {
+      // The element path is a debugging aid, not something worth showing to the
+      // model (or the user): the position word plus the quoted text is what
+      // actually locates a region on a page.
+      const where = locator(t, box, source, { element: false })
+      // A file is not self-evident the way an open page is: keep its path on
+      // the line, so the note still says what it is about once it leaves here.
+      const path = source && source.path ? source.path : ''
+      const place = [path, where].filter(Boolean).join(' · ')
+      const note = box.note && box.note.trim() ? box.note.trim() : t('promptNoNote')
+      return `${number}. ${place ? `${place} · ` : ''}${note}`
     }
 
     // -------------------------------------------------------------- composer IO
@@ -676,23 +668,49 @@ window.__ModuleLoader__.load({
     }
 
     /**
+     * The composer services behind a session: `conversation` creates drafts,
+     * `input` is the same action surface the composer UI calls, so nothing has
+     * to be mounted by us.
+     */
+    function composerFor(ctx, sessionId) {
+      let sessions = null
+      try { sessions = ctx.get('sessions') } catch { sessions = null }
+      if (!sessions) sessions = ctx.sessions
+      if (!sessions || !sessionId) return null
+
+      let binding = null
+      try { binding = sessions.binding(sessionId) } catch { binding = null }
+      if (!binding) return null
+
+      let conversation = null
+      try { conversation = binding.ctx.get('conversation') } catch { conversation = null }
+      if (!conversation) return null
+
+      let input = null
+      try { input = conversation.input.for(binding.ctx) } catch { input = null }
+      return { binding, conversation, input }
+    }
+
+    /** The draft as plain text, or '' when the input is unavailable. */
+    function readDraft(composer) {
+      if (!composer || !composer.input || !composer.input.state) return ''
+      try {
+        const snapshot = composer.input.state.getSnapshot()
+        return (snapshot && typeof snapshot.draft === 'string') ? snapshot.draft : ''
+      } catch {
+        return ''
+      }
+    }
+
+    /**
      * Write the crops and the prompt into a session's composer through the
      * conversation service, so no composer component has to be mounted by us.
      */
     function makeCommit(ctx) {
       return async ({ sessionId, files, text }) => {
-        let sessions = null
-        try { sessions = ctx.get('sessions') } catch { sessions = null }
-        if (!sessions) sessions = ctx.sessions
-        if (!sessions || !sessionId) return { ok: false, code: 'unavailable' }
-
-        let binding = null
-        try { binding = sessions.binding(sessionId) } catch { binding = null }
-        if (!binding) return { ok: false, code: 'unavailable' }
-
-        let conversation = null
-        try { conversation = binding.ctx.get('conversation') } catch { conversation = null }
-        if (!conversation) return { ok: false, code: 'unavailable' }
+        const composer = composerFor(ctx, sessionId)
+        if (!composer) return { ok: false, code: 'unavailable' }
+        const { binding, conversation, input } = composer
 
         let ordinary = true
         try { ordinary = binding.session.getSnapshot().subagent === null } catch { ordinary = true }
@@ -705,7 +723,6 @@ window.__ModuleLoader__.load({
         }
 
         try {
-          const input = conversation.input.for(binding.ctx)
           const outcome = conversation.input.requestDraftInitialization(binding, {
             prompt: text,
             whenDraftExists: 'append',
@@ -715,7 +732,7 @@ window.__ModuleLoader__.load({
             return { ok: false, code: 'busy' }
           }
           const ids = drafts.map((draft) => draft.id)
-          if (!input.addAttachments(ids)) {
+          if (!input || !input.addAttachments(ids)) {
             conversation.releaseDraftAttachments(drafts)
             return { ok: false, code: 'busy' }
           }
@@ -750,6 +767,10 @@ window.__ModuleLoader__.load({
       const [busy, setBusy] = useState(false)
       const [error, setError] = useState('')
       const [scroll, setScroll] = useState({ x: 0, y: 0 })
+      // Regions already pushed into the composer. They keep their bead on the
+      // page (and their number) until the whole draft is sent.
+      const [sent, setSent] = useState([])
+      const [editing, setEditing] = useState(null)
 
       const viewRef = useRef(null)
       const stageRef = useRef(null)
@@ -758,6 +779,8 @@ window.__ModuleLoader__.load({
       const shotRef = useRef(null)
       const targetRef = useRef(null)
       const slotRef = useRef(null)
+      const seqRef = useRef(0)
+      const sentRef = useRef([])
       const [slotHost, setSlotHost] = useState(null)
 
       // Keep one placeholder inside the pane's own toolbar, so the icon sits
@@ -821,11 +844,11 @@ window.__ModuleLoader__.load({
         targetRef.current = null
         setShot(null)
         setBoxes([])
+        setEditing(null)
         setSelected(null)
         setDragging(null)
         setBusy(false)
         setError('')
-        setScroll({ x: 0, y: 0 })
       }, [unfreeze])
 
       useEffect(() => () => unfreeze(), [unfreeze])
@@ -919,6 +942,45 @@ window.__ModuleLoader__.load({
         return () => node.removeEventListener('scroll', sync)
       }, [shot])
 
+      // Beads outlive the overlay: while any of them marks a live document, the
+      // document can still be scrolled without the overlay being open.
+      useEffect(() => {
+        if (!sent.some((entry) => entry.live)) return undefined
+        const timer = setInterval(() => {
+          const found = findTarget()
+          if (!found || found.kind !== 'document') return
+          const next = scrollOf(found)
+          setScroll((previous) => (previous.x === next.x && previous.y === next.y ? previous : next))
+        }, 400)
+        return () => clearInterval(timer)
+      }, [sent])
+
+      // A bead disappears once its line left the draft — either the message was
+      // sent, or the line was deleted by hand.
+      useEffect(() => {
+        if (!sent.length) return undefined
+        const timer = setInterval(() => {
+          const services = composerFor(props && props.ctx ? props.ctx : {}, sessionId)
+          if (!services || !services.input) return
+          const draft = readDraft(services)
+          let touched = false
+          const next = []
+          for (const entry of sent) {
+            if (draft.includes(entry.line)) {
+              if (entry.seen) next.push(entry)
+              else { next.push({ ...entry, seen: true }); touched = true }
+              continue
+            }
+            // Not in the draft yet: keep it until it was seen at least once, so
+            // the insert itself is never mistaken for a send.
+            if (!entry.seen) next.push(entry)
+            else touched = true
+          }
+          if (touched) setSent(next)
+        }, 900)
+        return () => clearInterval(timer)
+      }, [sent, sessionId])
+
       const pointIn = (event) => {
         const stage = stageRef.current
         if (!stage) return { x: 0, y: 0 }
@@ -956,9 +1018,14 @@ window.__ModuleLoader__.load({
         const target = targetRef.current
         if (!source || !target) return
         const id = `b${Date.now().toString(36)}${Math.floor(Math.random() * 1000)}`
+        // Numbers keep climbing while the session lasts: a region inserted into
+        // the composer keeps its own number, so the next one must not reuse it.
+        seqRef.current += 1
+        const number = seqRef.current
+        setEditing(null)
 
         if (source.kind === 'browser') {
-          const box = { id, x: rect.x, y: rect.y, w: rect.w, h: rect.h, note: '', anchor: {} }
+          const box = { id, n: number, x: rect.x, y: rect.y, w: rect.w, h: rect.h, note: '', anchor: {} }
           setBoxes((previous) => previous.concat(box))
           setSelected(id)
           const viewRect = {
@@ -997,6 +1064,7 @@ window.__ModuleLoader__.load({
           }
           setBoxes((previous) => previous.concat({
             id,
+            n: number,
             x: rect.x + current.x,
             y: rect.y + current.y,
             w: rect.w,
@@ -1028,11 +1096,34 @@ window.__ModuleLoader__.load({
         setBoxes((previous) => previous.map((box) => (box.id === id ? { ...box, note } : box)))
       }
 
+      const updateSentNote = (number, note) => {
+        setSent((previous) => previous.map((entry) => (entry.n === number ? { ...entry, note } : entry)))
+      }
+
       const removeBox = (id) => {
         setBoxes((previous) => previous.filter((box) => box.id !== id))
         setSelected((current) => (current === id ? null : current))
       }
 
+      /** Composer services for the session on screen, or null. */
+      const composer = () => composerFor(props && props.ctx ? props.ctx : {}, sessionId)
+
+      /** Where a committed region sits in the viewport right now. */
+      const bubblePoint = (entry) => {
+        const live = entry.live
+        const pane = anchor
+        const left = pane ? pane.left : entry.left
+        const top = pane ? pane.top : entry.top
+        return {
+          x: left + (live ? entry.box.x - scroll.x : entry.box.x),
+          y: top + (live ? entry.box.y - scroll.y : entry.box.y),
+        }
+      }
+
+      /**
+       * Push one region into the composer. The overlay stays open so the next
+       * region can be drawn right away; the inserted one turns into a bead.
+       */
       const insert = async () => {
         if (!sessionId) {
           setError(t('sbNeedSession'))
@@ -1040,43 +1131,169 @@ window.__ModuleLoader__.load({
         }
         const source = shotRef.current
         const target = targetRef.current
-        if (!source || !target || boxes.length === 0) return
+        if (!source || !target) return
+        const box = selectedBox || boxes[boxes.length - 1] || null
+        if (!box) return
         setError('')
         setBusy(true)
         try {
-          const files = []
           const renderer = documentKind(target.root)
-          for (let index = 0; index < boxes.length; index += 1) {
-            let blob = null
-            if (source.kind === 'browser') {
-              blob = await cropSnapshot(source, boxes[index])
-            } else if (boxes[index].anchor && boxes[index].anchor.page) {
-              blob = await cropPdfPage(target.root, boxes[index])
-            } else if (renderer === 'image') {
-              blob = await cropImage(target, boxes[index], scrollOf(target))
-            }
-            if (blob) files.push(new File([blob], `page-${index + 1}-${stamp()}.png`, { type: 'image/png' }))
+          let blob = null
+          if (source.kind === 'browser') {
+            blob = await cropSnapshot(source, box)
+          } else if (box.anchor && box.anchor.page) {
+            blob = await cropPdfPage(target.root, box)
+          } else if (renderer === 'image') {
+            blob = await cropImage(target, box, scrollOf(target))
           }
-          const text = buildPrompt(t, boxes, {
-            kind: source.kind,
-            url: source.url || '',
-            path: source.path || '',
-            images: files.length > 0,
-          })
+          const files = blob ? [new File([blob], `page-${box.n}-${stamp()}.png`, { type: 'image/png' })] : []
+          const text = buildLine(t, box, { kind: source.kind, url: source.url || '', path: source.path || '' }, box.n)
           const result = await commit({ sessionId, files, text })
           if (!result || result.ok !== true) {
             setError(result && result.code === 'busy' ? t('errBusy') : t('errUnavailable'))
             setBusy(false)
             return
           }
-          cancel()
+          const pane = anchor
+          setSent((previous) => previous.concat({
+            n: box.n,
+            note: box.note,
+            line: text,
+            box,
+            // Kept on the entry: the bead can be reopened long after the shot
+            // is gone, and the rewritten line needs the same path as the first.
+            source: { kind: source.kind, url: source.url || '', path: source.path || '' },
+            live: shot.mode === 'live',
+            left: pane ? pane.left : 0,
+            top: pane ? pane.top : 0,
+          }))
+          setBoxes((previous) => previous.filter((item) => item.id !== box.id))
+          setSelected(null)
         } catch (cause) {
           setError(t('errCrop', { msg: (cause && cause.message) || 'unknown' }))
+        } finally {
           setBusy(false)
         }
       }
 
+      /**
+       * Rewrite an already inserted line. The composer only exposes a "replace
+       * the whole prompt" writer, so the line is swapped inside the current
+       * draft text; if the user already edited it by hand the line is appended
+       * instead of being lost.
+       */
+      const commitEdit = async () => {
+        if (editing === null) return
+        const entry = sent.find((item) => item.n === editing)
+        if (!entry || !sessionId) {
+          setEditing(null)
+          return
+        }
+        const source = shotRef.current
+        const shape = source
+          ? { kind: source.kind, url: source.url || '', path: source.path || '' }
+          : (entry.source || { kind: 'document', url: '', path: '' })
+        const next = buildLine(t, { ...entry.box, note: entry.note }, shape, entry.n)
+        const services = composer()
+        setBusy(true)
+        try {
+          if (next !== entry.line && services && services.input) {
+            const draft = readDraft(services)
+            if (draft.includes(entry.line)) {
+              services.input.setDraft(draft.split(entry.line).join(next))
+            } else {
+              services.conversation.input.requestDraftInitialization(services.binding, {
+                prompt: next,
+                whenDraftExists: 'append',
+              })
+            }
+          }
+          setSent((previous) => previous.map((item) => (item.n === entry.n ? { ...item, line: next } : item)))
+        } catch (cause) {
+          setError(t('errCrop', { msg: (cause && cause.message) || 'unknown' }))
+        } finally {
+          setBusy(false)
+          setEditing(null)
+        }
+      }
+
       const selectedBox = selected ? boxes.find((box) => box.id === selected) ?? null : null
+      const editingEntry = editing === null ? null : sent.find((item) => item.n === editing) ?? null
+
+      // Beads stay on the page (also after the overlay closes) until the whole
+      // draft goes out, so a note can always be found and edited again.
+      const beads = sent.map((entry) => {
+        const point = bubblePoint(entry)
+        return el('button', {
+          key: `bead-${entry.n}`,
+          type: 'button',
+          className: 'dwa-bubble',
+          'data-editing': editing === entry.n ? '1' : '0',
+          title: entry.note || t('bubbleHint'),
+          style: { left: `${Math.round(point.x)}px`, top: `${Math.round(point.y)}px` },
+          onPointerDown: (event) => event.stopPropagation(),
+          onClick: (event) => {
+            event.preventDefault()
+            event.stopPropagation()
+            setEditing(entry.n)
+            setSelected(null)
+          },
+        }, String(entry.n))
+      })
+
+      const viewW = (typeof window !== 'undefined' && window.innerWidth) || 1280
+      const viewH = (typeof window !== 'undefined' && window.innerHeight) || 800
+      const spotOf = (left, top, width) => ({
+        left: Math.min(Math.max(10, Math.round(left)), Math.max(10, viewW - width - 10)),
+        top: Math.min(Math.max(10, Math.round(top)), Math.max(10, viewH - 220)),
+      })
+
+      /** The card that writes a note: a fresh region, or one already sent. */
+      const noteEditor = () => {
+        if (editingEntry) {
+          return el('textarea', {
+            key: `edit-${editingEntry.n}`,
+            value: editingEntry.note,
+            placeholder: busy ? t('sbInserting') : t('notePlaceholder'),
+            readOnly: busy,
+            onChange: (event) => updateSentNote(editingEntry.n, event.target.value),
+            onKeyDown: (event) => {
+              if (event.key !== 'Enter' || event.shiftKey || event.isComposing) return
+              if (event.nativeEvent && event.nativeEvent.isComposing) return
+              event.preventDefault()
+              void commitEdit()
+            },
+          })
+        }
+        if (!selectedBox) return null
+        return el('textarea', {
+          key: `note-${selectedBox.id}`,
+          ref: (node) => {
+            if (node) noteRefs.current[selectedBox.id] = node
+            else delete noteRefs.current[selectedBox.id]
+          },
+          value: selectedBox.note,
+          placeholder: busy ? t('sbInserting') : t('notePlaceholder'),
+          readOnly: busy,
+          onChange: (event) => updateNote(selectedBox.id, event.target.value),
+          // Enter inserts, Shift+Enter keeps the newline — the card has no
+          // button of its own.
+          onKeyDown: (event) => {
+            if (event.key !== 'Enter' || event.shiftKey || event.isComposing) return
+            if (event.nativeEvent && event.nativeEvent.isComposing) return
+            event.preventDefault()
+            void insert()
+          },
+        })
+      }
+
+      const closeCard = () => {
+        if (editing !== null) {
+          setEditing(null)
+          return
+        }
+        cancel()
+      }
 
       if (!shot) {
         const trigger = anchor
@@ -1089,6 +1306,10 @@ window.__ModuleLoader__.load({
             onClick: (event) => { event.preventDefault(); event.stopPropagation(); void openMarkup() },
           }, el(FrameIcon))
           : null
+        const width = Math.min(300, Math.max(232, 260))
+        const point = editingEntry ? bubblePoint(editingEntry) : null
+        const spot = point ? spotOf(point.x + 16, point.y - 10, width) : { left: 10, top: 10 }
+        const card = noteEditor()
         return el(React.Fragment, null,
           el('style', null, CSS),
           trigger && slotHost ? createPortal(trigger, slotHost) : null,
@@ -1101,7 +1322,19 @@ window.__ModuleLoader__.load({
               },
             }, trigger)
             : null,
-          error && anchor
+          beads,
+          card
+            ? el('div', {
+              className: 'dwa-sheet',
+              'data-compact': '0',
+              style: { left: `${spot.left}px`, top: `${spot.top}px`, width: `${width}px` },
+            },
+            el('div', { className: 'dwa-sheet-bar' },
+              el('button', { type: 'button', className: 'dwa-x', title: t('close'), onClick: closeCard }, '✕')),
+            card,
+            error ? el('div', { className: 'dwa-error' }, error) : null)
+            : null,
+          error && anchor && !card
             ? el('div', {
               className: 'dwa-sb-toast',
               style: {
@@ -1112,8 +1345,6 @@ window.__ModuleLoader__.load({
             : null)
       }
 
-      const total = boxes.length
-
       const live = shot.mode === 'live'
       // The anchor is the region in viewport pixels: frozen boxes are already
       // relative to the shot, live ones have to lose the current scroll.
@@ -1121,7 +1352,6 @@ window.__ModuleLoader__.load({
         x: shot.left + (live ? box.x - scroll.x : box.x),
         y: shot.top + (live ? box.y - scroll.y : box.y),
       })
-      const focusBox = selectedBox || boxes[total - 1] || null
       const sheetWidth = Math.min(300, Math.max(232, Math.round(shot.width * 0.3)))
 
       // The editor hugs the region it belongs to: to its right when there is
@@ -1151,38 +1381,15 @@ window.__ModuleLoader__.load({
 
       // The note editor only appears once a region exists, and it never sits on
       // top of the picture while a new region is being dragged out.
-      const sheetParts = total === 0 || dragging
+      // The note editor only appears once a region exists (or a sent bead is
+      // reopened), and it never sits on top of the picture while a new region is
+      // being dragged out.
+      const sheetParts = (!editingEntry && !selectedBox) || dragging
         ? null
         : [
           el('div', { className: 'dwa-sheet-bar' },
-            boxes.map((box, index) => el('button', {
-              key: box.id,
-              type: 'button',
-              className: 'dwa-chip',
-              'data-selected': selected === box.id ? '1' : '0',
-              onClick: () => setSelected(box.id),
-            }, String(index + 1))),
-            el('button', { type: 'button', className: 'dwa-x', title: t('close'), onClick: cancel }, '✕')),
-          selectedBox
-            ? el('textarea', {
-              ref: (node) => {
-                if (node) noteRefs.current[selectedBox.id] = node
-                else delete noteRefs.current[selectedBox.id]
-              },
-              value: selectedBox.note,
-              placeholder: busy ? t('sbInserting') : t('notePlaceholder'),
-              readOnly: busy,
-              onChange: (event) => updateNote(selectedBox.id, event.target.value),
-              // Enter inserts, Shift+Enter keeps the newline — the card has no
-              // button of its own.
-              onKeyDown: (event) => {
-                if (event.key !== 'Enter' || event.shiftKey || event.isComposing) return
-                if (event.nativeEvent && event.nativeEvent.isComposing) return
-                event.preventDefault()
-                void insert()
-              },
-            })
-            : null,
+            el('button', { type: 'button', className: 'dwa-x', title: t('close'), onClick: closeCard }, '✕')),
+          noteEditor(),
           error ? el('div', { className: 'dwa-error' }, error) : null,
         ]
 
@@ -1202,7 +1409,7 @@ window.__ModuleLoader__.load({
         onWheel,
       },
         live ? null : el('img', { src: shot.src, alt: '', draggable: false }),
-        boxes.map((box, index) => el('div', {
+        boxes.map((box) => el('div', {
           key: box.id,
           className: 'dwa-sb-box',
           'data-selected': selected === box.id ? '1' : '0',
@@ -1213,9 +1420,9 @@ window.__ModuleLoader__.load({
             height: `${(box.h / Math.max(1, shot.height)) * 100}%`,
           },
           onPointerDown: (event) => event.stopPropagation(),
-          onClick: (event) => { event.stopPropagation(); setSelected(box.id) },
+          onClick: (event) => { event.stopPropagation(); setEditing(null); setSelected(box.id) },
         },
-        el('div', { className: 'dwa-sb-n' }, String(index + 1)))),
+        el('div', { className: 'dwa-sb-n' }, String(box.n)))),
         dragging
           ? el('div', {
             className: 'dwa-sb-ghost',
@@ -1228,6 +1435,9 @@ window.__ModuleLoader__.load({
           })
           : null)
 
+      // A reopened bead is placed by the box it was drawn on; a fresh region by
+      // itself. Both live in shot coordinates, so the same placement works.
+      const focusBox = editingEntry ? editingEntry.box : selectedBox
       const spot = focusBox ? placeSheet(focusBox) : { left: 10, top: 10 }
       const sheetStyle = {
         left: `${Math.round(spot.left)}px`,
@@ -1249,10 +1459,10 @@ window.__ModuleLoader__.load({
       }, stage)
 
       const sheet = sheetParts
-        ? el('div', { className: 'dwa-sheet', 'data-compact': selectedBox ? '0' : '1', style: sheetStyle }, sheetParts)
+        ? el('div', { className: 'dwa-sheet', 'data-compact': '0', style: sheetStyle }, sheetParts)
         : null
 
-      return createPortal(el(React.Fragment, null, el('style', null, CSS), surface, sheet), document.body)
+      return createPortal(el(React.Fragment, null, el('style', null, CSS), surface, beads, sheet), document.body)
     }
 
     return {
