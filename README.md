@@ -63,7 +63,7 @@ DSH 的插件以「bundle」为单位安装。这个包的 id 是 `@wuwen1994/ds
 3. 看安装结果，不要看日志：
 
    ```json
-   { "stage": "enable", "enabled": true, "application": "applied", "version": "0.12.0", "warnings": [] }
+   { "stage": "enable", "enabled": true, "application": "applied", "version": "0.12.1", "warnings": [] }
    ```
 
    `application: "applied"` 且 `warnings` 为空，才算装上了。若是 `"failed"`，把返回里的错误行贴出来再排查。
