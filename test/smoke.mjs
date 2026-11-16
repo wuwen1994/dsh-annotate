@@ -275,6 +275,16 @@ class FakeNode {
     return null
   }
 
+  /** `Node.contains` — selections are checked against the preview body. */
+  contains(node) {
+    let current = node
+    while (current) {
+      if (current === this) return true
+      current = current.parentElement
+    }
+    return false
+  }
+
   querySelectorAll(selector) {
     const found = []
     const visit = (node) => {
@@ -325,6 +335,19 @@ function fakeDocument(roots, canvasLog) {
   const doc = {
     body: new FakeNode('body'),
     documentElement: new FakeNode('html'),
+    listeners: {},
+    // The plugin listens on the document in the capture phase; the stub keeps
+    // the handlers so a scenario can fire a right click through the same path.
+    addEventListener(type, handler) {
+      doc.listeners[type] = doc.listeners[type] ?? []
+      doc.listeners[type].push(handler)
+    },
+    removeEventListener(type, handler) {
+      doc.listeners[type] = (doc.listeners[type] ?? []).filter((entry) => entry !== handler)
+    },
+    fire(type, event) {
+      for (const handler of doc.listeners[type] ?? []) handler(event)
+    },
     querySelectorAll(selector) {
       return collect().filter((node) => node.matches(selector))
     },
@@ -449,8 +472,24 @@ function makeComposer() {
     session: { getSnapshot: () => ({ subagent: null }) },
   }
   const sessions = { binding: (id) => (id === 's1' ? binding : undefined) }
+  // The real service opens a shared popup in the shell; here it only has to
+  // remember what was asked for, so a scenario can resolve and run the rows.
+  const contextMenus = {
+    registered: [],
+    opened: [],
+    register(input) { contextMenus.registered.push(input); return () => {} },
+    open(target, point) { contextMenus.opened.push({ target, point }) },
+  }
+  const effects = []
   const ctx = {
     get: (name) => (name === 'sessions' ? sessions : name === 'conversation' ? conversation : undefined),
+    // Cordis runs the callback at once and keeps its disposer; so does this.
+    effect(callback) {
+      const dispose = callback()
+      if (typeof dispose === 'function') effects.push(dispose)
+      return dispose
+    },
+    contextMenus,
     slots: {
       registry: {},
       inject(name, callback) { callback() },
@@ -458,7 +497,7 @@ function makeComposer() {
     },
   }
   const useSessions = (selector) => selector({ byId: { s1: { id: 's1', retainedBy: { mainView: 1 } } }, ids: ['s1'] })
-  return { ctx, useSessions, log }
+  return { ctx, useSessions, log, contextMenus }
 }
 
 async function mountScenario({ runtime, plugin, ctx, useSessions, stage }) {
@@ -1093,10 +1132,154 @@ async function scenarioImage() {
   })
 }
 
+// ============================================== scenario E: selected text menu
+async function scenarioSelection() {
+  const runtime = createRuntime()
+  const plugin = loadModule(runtime)
+  const { ctx, useSessions, log, contextMenus } = makeComposer()
+  const canvasLog = []
+
+  const quote = '缓存失效以后，页面还在用旧样式。'
+  const line = new FakeNode('div', { 'data-textpreview-line': '140' }, rect(280, 340, 600, 18), [], `第 140 行：${quote}`)
+  const scrollport = new FakeNode('div', { 'data-textpreview-body': '' }, rect(260, 100, 1020, 760), [line])
+  const root = new FakeNode('div', {
+    'data-document-preview': 'markdown',
+    'data-textpreview-url': 'file:///notes/a.md',
+  }, rect(260, 100, 1020, 760), [
+    new FakeNode('div', { 'data-textpreview-path': '' }, rect(260, 100, 1020, 24), [], 'notes/a.md'),
+    scrollport,
+  ])
+  globalThis.document = fakeDocument([root], canvasLog)
+  globalThis.Image = FakeImage
+
+  const scene = await mountScenario({ runtime, plugin, ctx, useSessions, stage: rect(260, 100, 1020, 760) })
+
+  // A browser selection over part of one line: the range's container is the
+  // line element, so page/line reading has to come from its box.
+  const selection = {
+    isCollapsed: false,
+    rangeCount: 1,
+    toString: () => quote,
+    getRangeAt: () => ({
+      commonAncestorContainer: line,
+      getBoundingClientRect: () => rect(300, 340, 260, 18),
+    }),
+  }
+  globalThis.window.getSelection = () => selection
+
+  const rightClick = (overrides = {}) => {
+    let prevented = 0
+    let stopped = 0
+    const event = {
+      button: 2,
+      target: line,
+      clientX: 420,
+      clientY: 350,
+      defaultPrevented: false,
+      preventDefault() { prevented += 1; this.defaultPrevented = true },
+      stopPropagation() { stopped += 1 },
+      ...overrides,
+    }
+    globalThis.document.fire('contextmenu', event)
+    return { event, prevented, stopped }
+  }
+
+  const gesture = rightClick()
+  check('selection: the gesture is taken away from the native menu', () => {
+    assert.equal(gesture.prevented, 1, 'the native menu was not suppressed')
+    assert.equal(gesture.stopped, 1)
+    assert.equal(contextMenus.opened.length, 1)
+    assert.equal(contextMenus.opened[0].target.kind, 'annotate.selection')
+    assert.deepEqual(contextMenus.opened[0].point, { x: 420, y: 350 })
+  })
+
+  const value = contextMenus.opened[0].target.value
+  check('selection: the menu knows the words and where they live', () => {
+    assert.equal(value.path, 'notes/a.md')
+    assert.equal(value.from, 140)
+    assert.equal(value.page, 0)
+    assert.equal(value.quote, quote)
+    assert.match(value.text, /缓存失效/)
+  })
+
+  const provider = contextMenus.registered[0]
+  const actions = provider.resolve(value, undefined)
+  check('selection: copy keeps the native row, annotate is added after it', () => {
+    assert.deepEqual(actions.map((action) => action.id), ['copy', 'annotate'])
+    assert.deepEqual(actions.map((action) => action.label), ['复制', '批注'])
+  })
+
+  let copied = ''
+  Object.defineProperty(globalThis, 'navigator', {
+    value: { language: 'zh-CN', clipboard: { writeText: async (text) => { copied = text } } },
+    configurable: true,
+    writable: true,
+  })
+  await actions[0].run()
+  check('selection: copy carries the selection itself, not the whole line', () => {
+    assert.equal(copied, quote, `copied ${JSON.stringify(copied)}`)
+  })
+
+  // Nothing selected: the native menu must stay untouched for the rest of the app.
+  selection.isCollapsed = true
+  const collapsed = rightClick()
+  selection.isCollapsed = false
+  check('selection: a collapsed caret leaves the native menu alone', () => {
+    assert.equal(collapsed.prevented, 0)
+    assert.equal(contextMenus.opened.length, 1)
+  })
+
+  actions[1].run()
+  await runtime.flush()
+  scene.tree = scene.mount()
+
+  check('selection: annotate opens the same card, quoting the words', () => {
+    const strip = find(scene.tree, (node) => node.props?.className === 'dwa-quote')
+    assert.ok(strip, 'no quote strip')
+    assert.equal(textOf(strip), quote)
+    assert.ok(find(scene.tree, (node) => node.type === 'textarea'), 'no note box')
+    assert.equal(find(scene.tree, (node) => node.props?.className === 'dwa-freeze'), null, 'a selection must not open the overlay')
+  })
+
+  find(scene.tree, (node) => node.type === 'textarea').props.onChange({ target: { value: '这句要解释缓存什么时候失效' } })
+  await runtime.flush()
+  scene.tree = scene.mount()
+  find(scene.tree, (node) => node.type === 'textarea').props.onKeyDown({ key: 'Enter', shiftKey: false, preventDefault() {} })
+  await settle(runtime, scene.mount)
+  scene.tree = scene.mount()
+
+  check('selection: the prompt line carries file, line, quote and note, without a picture', () => {
+    assert.equal(log.drafted.length, 1)
+    assert.deepEqual(log.drafted[0].files, [], 'a text selection must not mint a crop')
+    assert.equal(log.inits.length, 1)
+    const prompt = log.inits[0].prompt
+    assert.match(prompt, /^notes\/a\.md · /)
+    assert.match(prompt, /第 140 行/)
+    assert.match(prompt, new RegExp(quote))
+    assert.match(prompt, /这句要解释缓存什么时候失效/)
+    assert.equal(prompt.split('\n').length, 1, `the line broke in two: ${JSON.stringify(prompt)}`)
+    assert.deepEqual(log.attachments, [[]], 'no attachments expected for a text selection')
+    assert.equal(find(scene.tree, (node) => node.props?.className === 'dwa-quote'), null, 'the card stayed open')
+  })
+
+  // Esc closes the card without touching the draft.
+  actions[1].run()
+  await runtime.flush()
+  scene.tree = scene.mount()
+  find(scene.tree, (node) => node.type === 'textarea').props.onKeyDown({ key: 'Escape', shiftKey: false, preventDefault() {}, stopPropagation() {} })
+  await runtime.flush()
+  scene.tree = scene.mount()
+  check('selection: escape closes the card', () => {
+    assert.equal(find(scene.tree, (node) => node.props?.className === 'dwa-quote'), null)
+    assert.equal(log.inits.length, 1, 'escape must not write to the draft')
+  })
+}
+
 await scenarioPage()
 await scenarioText()
 await scenarioPdf()
 await scenarioImage()
+await scenarioSelection()
 
 console.log(`ok — ${checks.length} checks`)
 for (const label of checks) console.log('  ✓', label)

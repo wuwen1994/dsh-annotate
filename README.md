@@ -26,6 +26,7 @@ DSH 的右侧栏可以直接打开网页，也能预览 PDF、Markdown、txt、�
 
 - **网页**：把右侧栏浏览器冻结成一张真实位图（Electron `<webview>` 的 `capturePage()`），所见即所得——滚动位置、缩放、暗色模式都和你看到的一样，然后在图上框选、裁剪。
 - **文件**：不冻结画面，你还能继续滚动；框跟着内容走，插入时 PDF 从页面 canvas 按设备分辨率裁剪，图片按自然分辨率裁剪。
+- **选中即批注**：不想框的时候，直接在 PDF / Markdown / txt / 代码里划出一句话，右键菜单里除了「复制」还多一条「批注」；点它弹出批注卡片，写完按回车，这句话连同页码/行号就进了输入框——不截图，一行一条。
 - **一次一条**：回车只把当前选中的框送进输入框，标注不退出，接着框下一处。
 - **气泡可回收**：插入过的框会变成一个蓝色玻璃小气泡，里面是它的编号；点气泡能重新打开那条批注改字，改完回车即同步到草稿；点气泡卡片的 `✕` 就把这条连提示词里那一行**和它的裁图**一起删掉。气泡一直留到这批提示词真正发出去为止（草稿里那行没了，气泡就消失）。
 - **编号看存活**：编号按"现在还剩几处"排，删掉中间任何一条，后面的自动补位；已插入条目的行号变化会同步改写草稿里对应的那一行。退出标注后重新开始，又从 1 数起。
@@ -103,6 +104,24 @@ cd ~/dsh-plugins/dsh-annotate && git pull
 
 快捷键与操作：`Esc` 或**右键**退出标注；点空白处取消选中；框上的编号可以直接点；选中某个框后按 `Delete` 删掉这一个框（没插入的框直接消失，已插入的用气泡卡片的 `✕` 删，两种都会让后面的编号补位）。
 
+### 只批注一句话（不拖框）
+
+标注模式适合「这块不对」，一句话的疑问更适合直接划词：
+
+1. 在 PDF / Markdown / txt / 代码预览里用鼠标划出要说的那句话。
+2. 在选区上右键，菜单里是「复制」和「批注」——「复制」和原来的系统行为一样。
+3. 点「批注」，选区旁边弹出批注卡片（顶部是这句话的预览）；写一句想说的，按 `Enter`，`Shift+Enter` 换行，`Esc` 不要了。
+4. 回车后这段话就进了输入框，光标也跟过去，接着写或直接发送。
+
+进输入框的样子（没有编号，也没有截图）：
+
+```
+docs/guide.pdf · 第 12/40 页 · 「浏览器会缓存旧样式」 · 这里和正文的矛盾要说清楚
+notes/a.md · 第 140 行 · 「缓存失效以后，页面还在用旧样式。」 · 这句解释得太含糊
+```
+
+选区批注不带编号，也不生成气泡——它不占画面，删掉就是删掉输入框里那一行。
+
 ## 定位是怎么算出来的
 
 | 预览类型 | 锚点来源 | 提示词里写成 |
@@ -115,12 +134,15 @@ cd ~/dsh-plugins/dsh-annotate && git pull
 
 定位是**线索**，不是保证：PDF 的文字层可能缺字，Markdown 没有行号。文件路径和页码/行号会写进每一行，方便模型自己回去核对。
 
+选区批注用同一套读取逻辑取页码和行号，但引号里只放你划中的那句话，而不是整行/整框的文字。
+
 ## 兼容与限制
 
 - **只标注可见区域**。网页是位图，滚出视口的部分没有像素；文件模式可以滚动后再框。
 - **不转发鼠标悬停 / 双击 / 把文件拖进页面**。框选状态下这些操作属于标注层。
 - **Excel 预览不裁图**（FortuneSheet 栅格），只给批注文字。
 - **网页模式依赖 Electron**，web 宿主的沙箱 iframe 无法读取像素。
+- **预览里的右键菜单被接管**：选中文字时给出「复制 / 批注」，没选中时（以及右键输入框时）仍是系统自带菜单。系统菜单本身在 Electron 主进程里，插件加不进去，所以这里是自己画一份。
 - 粘贴/输入法这类页面内输入不支持，标注层不接管键盘焦点。
 
 ## 工作原理
@@ -129,6 +151,7 @@ cd ~/dsh-plugins/dsh-annotate && git pull
 - UI 挂在 Client 的 `shell.overlay` 槽（全窗口、默认点击穿透的浮层）。触发图标本身是往面板自带的工具栏里插一个占位 `<span>` 再 `createPortal` 进去的——右侧栏没有提供扩展工具按钮的槽位，这是唯一能挨着刷新按钮的办法。
 - 网页：`document.querySelectorAll('webview[data-sidebar-browser-frame]')` 找到可见的右侧栏浏览器，`capturePage()` 取 `NativeImage` → `toDataURL()` 作背景；插入时 canvas 按 `naturalWidth / rect.width` 的缩放比裁剪。
 - 文件：不截图，直接覆盖透明层画框；PDF 从 `[data-pdf-page]` 里的 `<canvas>` 裁剪（canvas 宽度就是设备像素宽度）。
+- 选区批注：在 document 的**捕获阶段**监听 `contextmenu`，确认选区落在预览正文里就 `preventDefault()`（这也是压掉 Electron 原生右键菜单的唯一办法），再把自己注册的 `contextMenus` 贡献打开；菜单项只有「复制 / 批注」两条，「批注」把选区交给同一张批注卡片，回车同样走下面这条服务链，只是不带附件。
 - 写输入框走官方服务链，不碰 DOM：
 
   ```
@@ -157,7 +180,7 @@ icon.svg           插件图标
 node test/smoke.mjs
 ```
 
-它用一个微型假 DOM 跑四个场景：网页（冻结位图 + 裁图）、纯文本（行号定位、不发图）、PDF 页码 + 引文并按 canvas 2× 裁剪、图片按自然分辨率裁剪；另外覆盖「没画框时不渲染批注卡片」「右边放不下时卡片翻到左边」「点框时卡片跟着跳」「卡片只留关闭按钮、框上不留按钮、回车插入一条并继续标注、编号递增」「插入后出现气泡、气泡能重新打开并改写草稿」「发送后气泡消失、剩余框补位」「气泡卡片的 ✕ 删掉气泡并清掉那一行」「图标落在刷新按钮后」「元素路径不进提示词」「只注册 overlay 槽」「按住回车只插一次」「多行批注压成一行」「面板消失时自动收尾」「源码里没有上一代的残留」。输出 `ok — 32 checks` 即通过。
+它用一个微型假 DOM 跑五个场景：网页（冻结位图 + 裁图）、纯文本（行号定位、不发图）、PDF 页码 + 引文并按 canvas 2× 裁剪、图片按自然分辨率裁剪、划词右键（压掉原生菜单、复制走选区、批注卡片回车写入且不带图）；另外覆盖「没画框时不渲染批注卡片」「右边放不下时卡片翻到左边」「点框时卡片跟着跳」「卡片只留关闭按钮、框上不留按钮、回车插入一条并继续标注、编号递增」「插入后出现气泡、气泡能重新打开并改写草稿」「发送后气泡消失、剩余框补位」「气泡卡片的 ✕ 删掉气泡并清掉那一行」「图标落在刷新按钮后」「元素路径不进提示词」「只注册 overlay 槽」「按住回车只插一次」「多行批注压成一行」「面板消失时自动收尾」「没有选区时不动系统菜单」「Esc 关掉批注卡片」「源码里没有上一代的残留」。输出 `ok — 40 checks` 即通过。
 
 改动后自检顺序：`node --check client.js` → `node test/smoke.mjs` → 用 `plugin_manager` 重装（或 `set_bundle` 关再开）→ 刷新界面肉眼确认。
 
@@ -191,6 +214,13 @@ and insert the crops plus a prompt into the composer. Each line of the prompt
 carries a locator taken from the preview itself — page number and quoted text
 for PDFs, a line range for plain text, the nearest heading for Markdown — so
 the model can find the spot in a long document instead of guessing.
+
+**Selection instead of a box.** Select a sentence in a PDF / Markdown / txt /
+code preview and right-click: the menu offers *Copy* and *Annotate*. Annotate
+opens the same note card, and Enter drops one line into the composer — file,
+page or line, the quoted words, your note — with no crop. The native Electron
+copy menu cannot host extra rows, so the plugin intercepts the gesture, cancels
+the native menu and renders its own.
 
 **Install** (DSH keeps plugins as *bundles* installed from a directory, not
 from a package name):

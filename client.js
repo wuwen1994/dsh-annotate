@@ -32,6 +32,7 @@ window.__ModuleLoader__.load({
       errUnavailable: '当前离线，或者这个会话无法写入输入框。',
       errCrop: '裁切标注区域失败：{msg}',
       errShot: '截图失败：{msg}',
+      errAnnotate: '写入这条选区批注失败：{msg}',
       sbButtonPage: '标注页面',
       sbButtonDoc: '标注文档',
       sbNeedSession: '先在左侧选一个会话，批注才能插进输入框。',
@@ -47,6 +48,10 @@ window.__ModuleLoader__.load({
       sbAnchorLine: '第 {line} 行',
       sbAnchorHeading: '「{heading}」小节',
       sbAnchorElement: '<{tag}> 区域',
+      menuCopy: '复制',
+      menuAnnotate: '批注',
+      menuCopyFailed: '复制失败：剪贴板不可用。',
+      selQuote: '「{quote}」',
     }
 
     const EN = {
@@ -60,6 +65,7 @@ window.__ModuleLoader__.load({
       errUnavailable: 'Offline, or this session cannot accept a composer draft.',
       errCrop: 'Could not crop the marked region: {msg}',
       errShot: 'Could not capture the page: {msg}',
+      errAnnotate: 'Could not add this note: {msg}',
       sbButtonPage: 'Annotate page',
       sbButtonDoc: 'Annotate file',
       sbNeedSession: 'Pick a session on the left so the notes have a composer to land in.',
@@ -75,6 +81,10 @@ window.__ModuleLoader__.load({
       sbAnchorLine: 'line {line}',
       sbAnchorHeading: 'under "{heading}"',
       sbAnchorElement: 'in <{tag}>',
+      menuCopy: 'Copy',
+      menuAnnotate: 'Annotate',
+      menuCopyFailed: 'Could not copy the selection.',
+      selQuote: '“{quote}”',
     }
 
     function translator(dict) {
@@ -195,6 +205,10 @@ window.__ModuleLoader__.load({
       .dwa-sheet textarea { width: 100%; box-sizing: border-box; min-height: 44px; max-height: 96px; resize: vertical; padding: 6px 8px;
         font: inherit; font-size: 13px; color: var(--dsw-alias-label-primary, #111); background: var(--dsw-alias-bg-l1, rgba(127,127,127,.06));
         border: 1px solid var(--dsw-alias-border-l2, rgba(0,0,0,.12)); border-radius: var(--dsw-radius-sm, 6px); outline: none; }
+      /* The words a note is about, kept short: the card is a composer, not a reader. */
+      .dwa-quote { max-height: 56px; overflow: hidden; padding: 4px 8px; border-left: 2px solid var(--dsw-alias-brand-primary, #3b82f6);
+        border-radius: var(--dsw-radius-sm, 6px); background: var(--dsw-alias-bg-l1, rgba(127,127,127,.06));
+        color: var(--dsw-alias-label-secondary, #4a4f57); font-size: 12px; line-height: 1.5; }
       .dwa-x { width: 22px; height: 22px; margin-left: auto; border: none; border-radius: var(--dsw-radius-sm, 6px); background: transparent;
         color: var(--dsw-alias-label-tertiary, #8a8f98); font: inherit; font-size: 13px; line-height: 1; cursor: pointer; }
       .dwa-x:hover { background: var(--dsw-alias-interactive-bg-hover, rgba(127,127,127,.14)); color: var(--dsw-alias-label-primary, #111); }
@@ -223,17 +237,23 @@ window.__ModuleLoader__.load({
      * What the sidebar is showing right now. The browser tab wins because its
      * frame paints over the document pane when both are mounted.
      */
+    function documentTarget(root) {
+      if (!root) return null
+      const body = query(root, PREVIEW_BODY) || root
+      const scroll = query(body, PREVIEW_SCROLL) || body
+      const rect = rectOf(scroll)
+      if (!bigEnough(rect)) return null
+      return { kind: 'document', node: root, root, body, scroll, rect }
+    }
+
     function findTarget() {
       for (const node of queryAll(document, SIDEBAR_FRAME)) {
         const rect = rectOf(node)
         if (bigEnough(rect)) return { kind: 'browser', node, rect, root: node, scroll: null }
       }
       for (const root of queryAll(document, PREVIEW_ROOT)) {
-        const body = query(root, PREVIEW_BODY) || root
-        const scroll = query(body, PREVIEW_SCROLL) || body
-        const rect = rectOf(scroll)
-        if (!bigEnough(rect)) continue
-        return { kind: 'document', node: root, root, body, scroll, rect }
+        const target = documentTarget(root)
+        if (target) return target
       }
       return null
     }
@@ -493,6 +513,145 @@ window.__ModuleLoader__.load({
         (value) => (value && typeof value === 'object' ? value : { selector: '', quote: '' }),
         () => ({ selector: '', quote: '' }),
       )
+    }
+
+    // --------------------------------------------------------------- selection
+
+    /**
+     * Actions for selected text ride on the shared context menu, under this
+     * target kind. The kind is ours: the registry only demands that a provider
+     * exists for it, so no host type has to know about annotating.
+     */
+    const SELECTION_TARGET = 'annotate.selection'
+    /** Long paragraphs make a prompt line unreadable; the full text is still copied. */
+    const SELECTION_TEXT_MAX = 4000
+    /** Our own floating UI: a right click there is never a new selection. */
+    const OWN_UI = '.dwa-sheet, .dwa-freeze, .dwa-float, .dwa-bubble'
+
+    function isOwnUi(node) {
+      return Boolean(node) && typeof node.closest === 'function' && node.closest(OWN_UI) !== null
+    }
+
+    function isTextField(node) {
+      if (!node || typeof node.closest !== 'function') return false
+      return node.closest('input, textarea, [contenteditable]:not([contenteditable="false"])') !== null
+    }
+
+    /** Viewport point of a gesture, falling back to the middle of the text. */
+    function pointOf(event, rect) {
+      const x = event && Number(event.clientX)
+      const y = event && Number(event.clientY)
+      if (Number.isFinite(x) && Number.isFinite(y) && (x !== 0 || y !== 0)) return { x: Math.round(x), y: Math.round(y) }
+      if (!rect) return { x: 0, y: 0 }
+      return { x: Math.round(rect.left + rect.width / 2), y: Math.round(rect.top + rect.height / 2) }
+    }
+
+    /**
+     * Describe the text the user has selected inside the document preview.
+     *
+     * The page (or line range) is read from the same geometry the frame tool
+     * uses, but the quoted words come from the selection itself: the box-based
+     * quote would take whole lines around it, which is not what was selected.
+     */
+    function selectionInfo(target, event) {
+      if (!target || target.kind !== 'document') return null
+      const scope = target.body || target.root
+      let selection = null
+      try { selection = window.getSelection() } catch { return null }
+      if (!selection || selection.isCollapsed || !selection.rangeCount) return null
+      const text = String(selection.toString() || '').trim()
+      if (!text) return null
+      const range = selection.getRangeAt(0)
+      const holder = range.commonAncestorContainer
+      try {
+        if (!holder || !scope.contains(holder)) return null
+      } catch { return null }
+
+      let rect = null
+      try {
+        const box = range.getBoundingClientRect()
+        if (box && box.width > 0 && box.height > 0) rect = { left: box.left, top: box.top, width: box.width, height: box.height }
+      } catch { rect = null }
+      if (!rect) {
+        const node = holder.nodeType === 3 ? holder.parentElement : holder
+        const fallback = rectOf(node)
+        if (fallback && fallback.width > 0) rect = { left: fallback.left, top: fallback.top, width: fallback.width, height: fallback.height }
+      }
+
+      const anchor = rect
+        ? readAnchor(target, rect, OWN_UI)
+        : { page: 0, pages: 0, from: 0, to: 0, heading: '', quote: '', kind: '' }
+      const point = pointOf(event, rect)
+      return {
+        // The clip keeps a pinned message line readable without dropping the
+        // copy payload, which always uses the full selection.
+        text: text.length > SELECTION_TEXT_MAX ? text.slice(0, SELECTION_TEXT_MAX) : text,
+        quote: shrink(text, QUOTE_MAX),
+        page: Number(anchor.page) || 0,
+        pages: Number(anchor.pages) || 0,
+        from: Number(anchor.from) || 0,
+        to: Number(anchor.to) || 0,
+        heading: anchor.heading || '',
+        kind: anchor.kind || documentKind(target.root),
+        path: documentPath(target.root),
+        x: point.x,
+        y: point.y,
+      }
+    }
+
+    /**
+     * One line for a selection: file, place, the quoted words, then the note.
+     *
+     * No leading number — numbers belong to the beads drawn on the page, and a
+     * selection leaves no bead behind to keep them in step.
+     */
+    function selectionLine(t, value, note) {
+      const where = []
+      if (value.page) {
+        where.push(value.pages
+          ? t('sbAnchorPage', { page: value.page, total: value.pages })
+          : t('sbAnchorPageSolo', { page: value.page }))
+      } else if (value.from) {
+        where.push(value.from === value.to
+          ? t('sbAnchorLine', { line: value.from })
+          : t('sbAnchorLines', { from: value.from, to: value.to }))
+      } else if (value.heading) {
+        where.push(t('sbAnchorHeading', { heading: value.heading }))
+      }
+      const quote = value.quote || shrink(value.text, QUOTE_MAX)
+      if (quote) where.push(t('selQuote', { quote }))
+      const place = [value.path, where.join(' · ')].filter(Boolean).join(' · ')
+      const written = note && note.trim() ? note.trim().replace(/\s*\n\s*/g, ' ') : t('promptNoNote')
+      return place ? `${place} · ${written}` : written
+    }
+
+    /**
+     * Copy with the clipboard API, and with a select-and-execCommand fallback:
+     * a renderer without clipboard permission (or an old engine) must not turn
+     * the menu row into a no-op.
+     */
+    async function copyText(text) {
+      const value = String(text || '')
+      if (!value) throw new Error('empty selection')
+      try {
+        if (navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
+          await navigator.clipboard.writeText(value)
+          return
+        }
+      } catch { /* fall through to the legacy path */ }
+      const area = document.createElement('textarea')
+      area.value = value
+      area.setAttribute('readonly', '')
+      area.style.position = 'fixed'
+      area.style.left = '-10000px'
+      area.style.top = '0'
+      document.body.appendChild(area)
+      try {
+        if (typeof area.select === 'function') area.select()
+        if (typeof document.execCommand === 'function' && !document.execCommand('copy')) throw new Error('copy refused')
+      } finally {
+        if (area.parentElement) area.parentElement.removeChild(area)
+      }
     }
 
     // ------------------------------------------------------------------ capture
@@ -789,6 +948,28 @@ window.__ModuleLoader__.load({
     // ------------------------------------------------------------- the component
 
     /**
+     * Menu actions run outside React — the registry keeps them after the popup
+     * closes — so a selection travels from the menu to the card through this
+     * bus instead of reaching into a component instance.
+     */
+    function createBus() {
+      const listeners = new Set()
+      return {
+        listen(fn) {
+          listeners.add(fn)
+          return () => { listeners.delete(fn) }
+        },
+        send(payload) {
+          for (const fn of Array.from(listeners)) {
+            try { fn(payload) } catch { /* the component went away */ }
+          }
+        },
+      }
+    }
+
+    const selectionBus = createBus()
+
+    /**
      * Floating annotator for the sidebar. Browser tabs are frozen into a bitmap
      * (the webview paints over DOM, so it is hidden while the bitmap is shown);
      * document previews keep living pixels and get a transparent capture layer,
@@ -812,6 +993,8 @@ window.__ModuleLoader__.load({
       // page (and their number) until the whole draft is sent.
       const [sent, setSent] = useState([])
       const [editing, setEditing] = useState(null)
+      // The text an action picked out of the preview, waiting for its note.
+      const [mark, setMark] = useState(null)
 
       const viewRef = useRef(null)
       const viewVisibilityRef = useRef('')
@@ -920,12 +1103,23 @@ window.__ModuleLoader__.load({
 
       useEffect(() => () => unfreeze(), [unfreeze])
 
+      // The context menu only offers the action; the card that follows is the
+      // same one the frame tool uses, so the note reads exactly like a drawn one.
+      useEffect(() => selectionBus.listen((payload) => {
+        const value = payload && payload.value
+        if (!value) return
+        setEditing(null)
+        setSelected(null)
+        setMark({ value, note: '', busy: false, error: '' })
+      }), [])
+
       const openMarkup = useCallback(async () => {
         // Already marking, or a capture is on its way: the icon is still
         // visible in the pane's toolbar, so a second click must not start a
         // nested session.
         if (shotRef.current || openingRef.current) return
         openingRef.current = true
+        setMark(null)
         const found = findTarget()
         if (!found) {
           // Nothing to mark: the click has to be forgotten, or the guard above
@@ -1337,6 +1531,39 @@ window.__ModuleLoader__.load({
       }
 
       /**
+       * Send the pending text selection: no crop, so the note is one line and
+       * the draft is the only place it has to land.
+       */
+      const submitMark = async () => {
+        if (!mark || writingRef.current) return
+        if (!sessionId) {
+          setMark((previous) => (previous ? { ...previous, error: t('sbNeedSession') } : previous))
+          return
+        }
+        writingRef.current = true
+        setMark((previous) => (previous ? { ...previous, busy: true, error: '' } : previous))
+        try {
+          const text = selectionLine(t, mark.value, mark.note)
+          const result = await commit({ sessionId, files: [], text })
+          if (!result || result.ok !== true) {
+            setMark((previous) => (previous
+              ? { ...previous, busy: false, error: result && result.code === 'busy' ? t('errBusy') : t('errUnavailable') }
+              : previous))
+            return
+          }
+          setMark(null)
+        } catch (cause) {
+          setMark((previous) => (previous
+            ? { ...previous, busy: false, error: t('errAnnotate', { msg: (cause && cause.message) || 'unknown' }) }
+            : previous))
+        } finally {
+          writingRef.current = false
+        }
+      }
+
+      const closeMark = () => setMark(null)
+
+      /**
        * Rewrite an already inserted line. The composer only exposes a "replace
        * the whole prompt" writer, so the line is swapped inside the current
        * draft text; if the user already edited it by hand the line is appended
@@ -1498,6 +1725,38 @@ window.__ModuleLoader__.load({
         const point = editingEntry ? bubblePoint(editingEntry) : null
         const spot = point ? spotOf(point.x + 16, point.y - 10, width) : { left: 10, top: 10 }
         const card = noteEditor()
+        const markWidth = Math.max(232, Math.min(300, Math.round(viewW * 0.28)))
+        const markSpot = mark ? spotOf(mark.value.x + 12, mark.value.y + 12, markWidth) : null
+        const markSheet = mark
+          ? el('div', {
+            className: 'dwa-sheet',
+            'data-compact': '0',
+            style: { left: `${markSpot.left}px`, top: `${markSpot.top}px`, width: `${markWidth}px` },
+          },
+          el('div', { className: 'dwa-sheet-bar' },
+            el('button', { type: 'button', className: 'dwa-x', title: t('close'), onClick: closeMark }, '✕')),
+          el('div', { className: 'dwa-quote', title: mark.value.text }, mark.value.quote || mark.value.text),
+          el('textarea', {
+            autoFocus: true,
+            value: mark.note,
+            placeholder: mark.busy ? t('sbInserting') : t('notePlaceholder'),
+            readOnly: mark.busy,
+            onChange: (event) => setMark((previous) => (previous ? { ...previous, note: event.target.value } : previous)),
+            onKeyDown: (event) => {
+              if (event.key === 'Escape') {
+                event.preventDefault()
+                event.stopPropagation()
+                closeMark()
+                return
+              }
+              if (event.key !== 'Enter' || event.shiftKey || event.isComposing) return
+              if (event.nativeEvent && event.nativeEvent.isComposing) return
+              event.preventDefault()
+              void submitMark()
+            },
+          }),
+          mark.error ? el('div', { className: 'dwa-error' }, mark.error) : null)
+          : null
         return el(React.Fragment, null,
           el('style', null, CSS),
           trigger && slotHost ? createPortal(trigger, slotHost) : null,
@@ -1511,6 +1770,7 @@ window.__ModuleLoader__.load({
             }, trigger)
             : null,
           beads,
+          markSheet,
           card
             ? el('div', {
               className: 'dwa-sheet',
@@ -1663,8 +1923,58 @@ window.__ModuleLoader__.load({
 
     return {
       name: 'annotate',
-      inject: ['slots'],
+      inject: ['slots', 'contextMenus'],
       apply(ctx) {
+        const t = resolveT(undefined)
+
+        // Selected text in a preview normally opens the Electron menu, whose
+        // only row is "copy" — it is built in the desktop main process, so no
+        // plugin can add to it. The gesture is therefore intercepted before
+        // Blink shows it and handed to the harness' own Web menu instead.
+        ctx.effect(() => {
+          const onContextMenu = (event) => {
+            if (!event || (event.button !== undefined && event.button !== 2)) return
+            if (event.defaultPrevented) return
+            const node = event.target
+            if (isTextField(node) || isOwnUi(node)) return
+            const root = node && typeof node.closest === 'function' ? node.closest(PREVIEW_ROOT) : null
+            const target = documentTarget(root)
+            if (!target) return
+            const value = selectionInfo(target, event)
+            if (!value) return
+            // Ours from here on: preventDefault is also what stops the native
+            // menu, and the menu plugin listens for the bubble to close itself.
+            event.preventDefault()
+            event.stopPropagation()
+            ctx.contextMenus.open({ kind: SELECTION_TARGET, value }, { x: value.x, y: value.y })
+          }
+          document.addEventListener('contextmenu', onContextMenu, true)
+          return () => document.removeEventListener('contextmenu', onContextMenu, true)
+        })
+
+        ctx.effect(() => ctx.contextMenus.register({
+          id: 'selection',
+          target: SELECTION_TARGET,
+          order: 20,
+          resolve: (value) => {
+            const text = value && value.text ? value.text : ''
+            return [
+              {
+                id: 'copy',
+                label: t('menuCopy'),
+                failureLabel: t('menuCopyFailed'),
+                disabled: !text,
+                run: () => copyText(text),
+              },
+              {
+                id: 'annotate',
+                label: t('menuAnnotate'),
+                run: () => { selectionBus.send({ value }) },
+              },
+            ]
+          },
+        }))
+
         // `shell.overlay` is the frame-wide, click-through layer owned by the
         // shell; the annotator lives there and follows the sidebar pane.
         ctx.slots.inject('shell.overlay', () => ctx.slots.register({

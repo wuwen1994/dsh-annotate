@@ -1,7 +1,7 @@
 {
   "meta": {
     "title": "Sidebar annotate",
-    "description": "Box regions on whatever the DSH sidebar is showing — a web page, PDF, Word/PPT, Markdown, txt, code or image — write notes, and drop crops plus a prompt anchored by page and line numbers into the composer.",
+    "description": "Box regions on whatever the DSH sidebar is showing — a web page, PDF, Word/PPT, Markdown, txt, code or image — write notes, and drop crops plus a prompt anchored by page and line numbers into the composer. For a single sentence, select it, right-click and pick Annotate: one line, no crop.",
     "detail": "docs/DETAIL.md"
   }
 }
