@@ -471,7 +471,7 @@ function makeComposer() {
     ctx: { get: (name) => (name === 'conversation' ? conversation : undefined) },
     session: { getSnapshot: () => ({ subagent: null }) },
   }
-  const sessions = { binding: (id) => (id === 's1' ? binding : undefined) }
+  const sessions = { binding: (id) => (id === 's1' || id === 's2' ? binding : undefined) }
   // The real service opens a shared popup in the shell; here it only has to
   // remember what was asked for, so a scenario can resolve and run the rows.
   const contextMenus = {
@@ -496,7 +496,18 @@ function makeComposer() {
       register(options, component) { this.registry[options.name] = { options, component }; return () => {} },
     },
   }
-  const useSessions = (selector) => selector({ byId: { s1: { id: 's1', retainedBy: { mainView: 1 } } }, ids: ['s1'] })
+  // Two conversations are known; only the one named by `current` is in the
+  // sidebar, which is exactly how the host reports a switch.
+  let current = 's1'
+  const roster = () => ({
+    byId: {
+      s1: { id: 's1', retainedBy: { mainView: 1 } },
+      s2: { id: 's2', retainedBy: { mainView: 1 } },
+    },
+    ids: [current],
+  })
+  const useSessions = (selector) => selector(roster())
+  useSessions.switchTo = (id) => { current = id }
   return { ctx, useSessions, log, contextMenus }
 }
 
@@ -674,7 +685,8 @@ async function scenarioPage() {
     const badges = findAll(scene.tree, (node) => node.props?.className === 'dwa-sb-del')
     assert.equal(badges.length, 0, 'the region still paints a close badge')
     const insertButtons = findAll(scene.tree, (node) => node.type === 'button' && node.props?.className === 'dwa-btn')
-    assert.equal(insertButtons.length, 0, 'the insert button came back')
+    assert.equal(insertButtons.length, 1, 'the bulk insert button is missing while two regions wait')
+    assert.match(textOf(insertButtons[0]), /全部插入/, 'the bulk button does not say what it does')
     assert.ok(!source.includes('brightness('), 'the primary button still has a hover filter')
   })
 
@@ -702,12 +714,12 @@ async function scenarioPage() {
 
   check('page: the selected region is cropped into the composer', () => {
     assert.ok(canvasLog.length >= 1, 'the crop canvas was never built')
-    assert.equal(canvasLog[0].width, 82, 'crop width ignores the capture scale')
-    assert.equal(canvasLog[0].height, 74, 'crop height ignores the capture scale')
+    assert.equal(canvasLog[0].width, 96, 'crop width ignores the capture scale')
+    assert.equal(canvasLog[0].height, 87, 'crop height ignores the capture scale')
     assert.equal(log.drafted.length, 1, 'createDrafts was not called')
     const files = log.drafted[0].files
     assert.equal(files.length, 1, 'only the region that was inserted should be cropped')
-    assert.match(files[0].name, /^page-1-.*\.png$/)
+    assert.match(files[0].name, /^page-1-.*\.jpg$/)
     assert.equal(log.inits.length, 1)
     assert.equal(log.inits[0].whenDraftExists, 'append')
     // One line, no header and no trailer around it.
@@ -770,6 +782,16 @@ async function scenarioPage() {
   find(scene.tree, (node) => node.type === 'textarea').props.onChange({ target: { value: '这个按钮在右键菜单里点不到，改成 hover 反而能看到' } })
   await runtime.flush()
   scene.tree = scene.mount()
+
+  // The pruner runs on a timer. Grab the interval callbacks instead of waiting
+  // for real seconds: rewriting the note re-registers the effect, so the swap
+  // has to happen before the edit that hands us a pruner bound to this bead.
+  const realSetInterval2 = globalThis.setInterval
+  const realClearInterval2 = globalThis.clearInterval
+  let pruners = []
+  globalThis.setInterval = (callback) => { pruners.push(callback); return pruners.length }
+  globalThis.clearInterval = () => {}
+
   find(scene.tree, (node) => node.type === 'textarea').props.onKeyDown({ key: 'Enter', shiftKey: false, preventDefault() {} })
   await settle(runtime, scene.mount)
   scene.tree = scene.mount()
@@ -787,38 +809,26 @@ async function scenarioPage() {
     assert.ok(find(scene.tree, (node) => node.props?.className === 'dwa-bubble'), 'the beads disappeared after an edit')
   })
 
-  // Sending is the only thing that retires the beads. The pruner runs on a timer,
-  // so the test grabs the interval callback instead of waiting for real seconds.
-  const realSetInterval2 = globalThis.setInterval
-  const realClearInterval2 = globalThis.clearInterval
-  let pruners = []
-  globalThis.setInterval = (callback) => { pruners.push(callback); return pruners.length }
-  globalThis.clearInterval = () => {}
+  // Sending is the only thing that retires the beads. The pruners were grabbed
+  // above; run them all, newest last, once the composer reports it is sending.
   try {
-    // Reopening a bead and saving re-registers the effect, which hands us a
-    // fresh pruner bound to the current beads.
-    find(scene.tree, (node) => node.props?.className === 'dwa-bubble').props.onClick({ preventDefault() {}, stopPropagation() {} })
-    await runtime.flush()
-    scene.tree = scene.mount()
-    find(scene.tree, (node) => node.type === 'textarea').props.onKeyDown({ key: 'Enter', shiftKey: false, preventDefault() {} })
-    await settle(runtime, scene.mount)
-    scene.tree = scene.mount()
-
     assert.ok(pruners.length > 0, 'no pruner was registered')
     log.phase = 'sending'
-    for (const pruner of pruners) pruner()
+    for (const pruner of [...pruners].reverse()) pruner()
     await runtime.flush()
     scene.tree = scene.mount()
 
-    check('page: sending the prompt retires the beads', () => {
-      assert.equal(find(scene.tree, (node) => node.props?.className === 'dwa-bubble'), null, 'the beads outlived the send')
+    check('page: sending the prompt turns the beads into records', () => {
+      const beads = findAll(scene.tree, (node) => node.props?.className === 'dwa-bubble')
+      assert.equal(beads.length, 1, 'the bead vanished with the send')
+      assert.equal(beads[0].props['data-ghost'], '1', 'the sent bead is not marked as sent')
     })
 
-    check('page: the regions still open close the numbering gap', () => {
+    check('page: the regions still open keep their numbers', () => {
       assert.deepEqual(
         findAll(scene.tree, (node) => node.props?.className === 'dwa-sb-n').map(textOf),
-        ['1', '2'],
-        'the live regions kept their old numbers',
+        ['2', '3'],
+        'the live regions were renumbered after a send',
       )
     })
   } finally {
@@ -828,8 +838,29 @@ async function scenarioPage() {
 
   log.phase = 'plain'
 
-  // An open region can be inserted again, and that bead takes number 1 because
-  // it is the only thing marked so far.
+  // The bead from the send is still there, as a record: it opens without an
+  // editor, and closing it drops the record without touching the composer.
+  find(scene.tree, (node) => node.props?.className === 'dwa-bubble').props.onClick({ preventDefault() {}, stopPropagation() {} })
+  await runtime.flush()
+  scene.tree = scene.mount()
+
+  check('page: a sent bead reopens as a record, not an editor', () => {
+    assert.equal(find(scene.tree, (node) => node.type === 'textarea'), null, 'a sent bead offered a text box')
+    assert.ok(find(scene.tree, (node) => node.props?.className === 'dwa-actions'), 'the record has no actions')
+  })
+
+  find(scene.tree, (node) => node.props?.className === 'dwa-x').props.onClick()
+  await runtime.flush()
+  scene.tree = scene.mount()
+
+  check('page: closing a sent bead only closes its card', () => {
+    const beads = findAll(scene.tree, (node) => node.props?.className === 'dwa-bubble')
+    assert.equal(beads.length, 1, 'closing the record dropped the note')
+    assert.equal(find(scene.tree, (node) => node.props?.className === 'dwa-actions'), null, 'the record card stayed open')
+    assert.equal(log.setDrafts.length, 1, 'a record edit rewrote the draft')
+  })
+
+  // An open region is still numbered after the ones already sent.
   find(scene.tree, (node) => node.props?.className === 'dwa-sb-box').props.onClick({ preventDefault() {}, stopPropagation() {} })
   await runtime.flush()
   scene.tree = scene.mount()
@@ -838,13 +869,17 @@ async function scenarioPage() {
   scene.tree = scene.mount()
   const freshLine = log.inits[log.inits.length - 1].prompt
 
-  check('page: a fresh bead starts again at 1', () => {
-    const bubble = find(scene.tree, (node) => node.props?.className === 'dwa-bubble')
-    assert.ok(bubble, 'no bead was created')
-    assert.equal(bubble.children[0], '1', 'the bead number ignored the live count')
+  check('page: numbering does not restart after a send', () => {
+    const bubbles = findAll(scene.tree, (node) => node.props?.className === 'dwa-bubble')
+    assert.ok(bubbles.length >= 2, 'no bead was created')
+    assert.equal(bubbles[bubbles.length - 1].children[0], '2', 'the bead reused a number that had already gone out')
   })
 
-  find(scene.tree, (node) => node.props?.className === 'dwa-bubble').props.onClick({ preventDefault() {}, stopPropagation() {} })
+  const lastBubble = () => {
+    const all = findAll(scene.tree, (node) => node.props?.className === 'dwa-bubble')
+    return all[all.length - 1]
+  }
+  lastBubble().props.onClick({ preventDefault() {}, stopPropagation() {} })
   await runtime.flush()
   scene.tree = scene.mount()
   find(scene.tree, (node) => node.props?.className === 'dwa-x').props.onClick()
@@ -852,7 +887,9 @@ async function scenarioPage() {
   scene.tree = scene.mount()
 
   check('page: closing the bead deletes it and its line', () => {
-    assert.equal(find(scene.tree, (node) => node.props?.className === 'dwa-bubble'), null, 'the bead survived its own close button')
+    const left = findAll(scene.tree, (node) => node.props?.className === 'dwa-bubble')
+    assert.equal(left.length, 1, 'the live bead or the sent record went with the close')
+    assert.equal(left[0].props['data-ghost'], '1', 'the bead that stayed is not the sent record')
     const written = log.setDrafts[log.setDrafts.length - 1]
     assert.ok(typeof written === 'string', 'the draft was never rewritten')
     assert.ok(!written.includes(freshLine), 'the line stayed in the prompt')
@@ -880,7 +917,8 @@ async function scenarioPage() {
     assert.equal(find(scene.tree, (node) => node.props?.className === 'dwa-sb-box'), null, 'the regions survived the right click')
   })
 
-  // Cancelling a session forgets the numbers too: the next region starts at 1.
+  // Cancelling a session does not hand numbers back out: the sent record keeps
+  // its number for good, and the next region carries on after it.
   find(scene.tree, (node) => node.type === 'button' && node.props?.className === 'dwa-tool').props.onClick({ preventDefault() {}, stopPropagation() {} })
   await settle(runtime, scene.mount)
   scene.tree = scene.mount()
@@ -891,11 +929,11 @@ async function scenarioPage() {
   await settle(runtime, scene.mount)
   scene.tree = scene.mount()
 
-  check('page: a new session numbers from 1 again', () => {
+  check('page: a new session numbers after the sent record', () => {
     assert.deepEqual(
       findAll(scene.tree, (node) => node.props?.className === 'dwa-sb-n').map(textOf),
-      ['1'],
-      'the number kept climbing after the session was cancelled',
+      ['2'],
+      'the number went back to one and collided with a line that was already sent',
     )
   })
 
@@ -999,7 +1037,9 @@ async function scenarioText() {
     // No header and no trailer around the line any more.
     assert.ok(!prompt.includes('我在'), 'the header came back')
     assert.ok(!prompt.includes('定位以引号里的文字为准'), 'the trailer came back')
-    assert.deepEqual(log.attachments, [[]], 'no attachments expected for a text document')
+    // A note without a crop never asks the composer to attach anything: an
+    // empty call could be answered with "busy" and fail a plain text note.
+    assert.deepEqual(log.attachments, [], 'no attachment call expected for a text document')
   })
 }
 
@@ -1064,10 +1104,10 @@ async function scenarioPdf() {
 
   check('pdf: crop comes from the page canvas, at device resolution', () => {
     assert.equal(canvasLog.length, 1, 'the page canvas was never cropped')
-    assert.equal(canvasLog[0].width, 800, 'crop width ignores the canvas scale')
+    assert.equal(canvasLog[0].width, 832, 'crop width ignores the canvas scale')
     assert.equal(log.drafted.length, 1)
     assert.equal(log.drafted[0].files.length, 1, 'expected one crop')
-    assert.match(log.drafted[0].files[0].name, /^page-1-.*\.png$/)
+    assert.match(log.drafted[0].files[0].name, /^page-1-.*\.jpg$/)
     const prompt = log.inits[0].prompt
     assert.match(prompt, /^1\. docs\/guide\.pdf · /)
     assert.match(prompt, /第 2\/3 页/)
@@ -1123,7 +1163,7 @@ async function scenarioImage() {
 
   check('image: crop comes from the rendered image at natural scale', () => {
     assert.equal(canvasLog.length, 1, 'the image was never cropped')
-    assert.equal(canvasLog[0].width, 400, 'crop width ignores the 2x natural scale')
+    assert.equal(canvasLog[0].width, 432, 'crop width ignores the 2x natural scale')
     assert.equal(log.drafted[0].files.length, 1)
     const prompt = log.inits[0].prompt
     assert.match(prompt, /^1\. assets\/wide\.png · /)
@@ -1258,7 +1298,7 @@ async function scenarioSelection() {
     assert.match(prompt, new RegExp(quote))
     assert.match(prompt, /这句要解释缓存什么时候失效/)
     assert.equal(prompt.split('\n').length, 1, `the line broke in two: ${JSON.stringify(prompt)}`)
-    assert.deepEqual(log.attachments, [[]], 'no attachments expected for a text selection')
+    assert.deepEqual(log.attachments, [], 'no attachment call expected for a text selection')
     assert.equal(find(scene.tree, (node) => node.props?.className === 'dwa-quote'), null, 'the card stayed open')
   })
 
@@ -1275,11 +1315,169 @@ async function scenarioSelection() {
   })
 }
 
+// ============================================== scenario F: session switching
+async function scenarioSessionSwitch() {
+  const runtime = createRuntime()
+  const plugin = loadModule(runtime)
+  const { ctx, useSessions, log } = makeComposer()
+
+  const webview = new FakeNode('webview', { 'data-sidebar-browser-frame': 'webview' }, rect(260, 100, 1020, 760))
+  webview.capturePage = () => Promise.resolve({ toDataURL: () => 'data:image/png;base64,AAAA', getSize: () => ({ width: 840, height: 600 }) })
+  webview.getURL = () => 'http://127.0.0.1:8799/third'
+  webview.executeJavaScript = () => Promise.resolve({ selector: '', heading: '', quote: '' })
+  const toolbar = new FakeNode('form', {})
+  toolbar.append(new FakeNode('button', { 'aria-label': 'reload' }))
+  const addressBox = new FakeNode('div', {})
+  addressBox.append(new FakeNode('input', { 'aria-label': 'address' }))
+  toolbar.append(addressBox)
+  const pane = new FakeNode('div', {}, rect(260, 60, 1020, 800), [toolbar, webview])
+  globalThis.document = fakeDocument([pane], [])
+  globalThis.Image = FakeImage
+
+  const realSetInterval = globalThis.setInterval
+  const realClearInterval = globalThis.clearInterval
+  const timers = []
+  globalThis.setInterval = (callback) => { timers.push(callback); return timers.length }
+  globalThis.clearInterval = () => {}
+
+  try {
+    const scene = await mountScenario({ runtime, plugin, ctx, useSessions, stage: rect(260, 100, 1020, 760) })
+    const trigger = find(scene.tree, (node) => node.type === 'button' && node.props?.className === 'dwa-tool')
+    trigger.props.onClick({ preventDefault() {}, stopPropagation() {} })
+    await settle(runtime, scene.mount)
+    scene.tree = scene.mount()
+
+    const stageNode = find(scene.tree, (node) => node.props?.className === 'dwa-stage')
+    stageNode.props.onPointerDown({ button: 0, pointerId: 1, clientX: 320, clientY: 160, currentTarget: { setPointerCapture() {} } })
+    stageNode.props.onPointerMove({ clientX: 420, clientY: 250 })
+    stageNode.props.onPointerUp({ clientX: 420, clientY: 250 })
+    await settle(runtime, scene.mount)
+    scene.tree = scene.mount()
+    find(scene.tree, (node) => node.type === 'textarea').props.onChange({ target: { value: '这一条只属于第一个会话' } })
+    await runtime.flush()
+    scene.tree = scene.mount()
+    find(scene.tree, (node) => node.type === 'textarea').props.onKeyDown({ key: 'Enter', shiftKey: false, preventDefault() {} })
+    await settle(runtime, scene.mount)
+    scene.tree = scene.mount()
+
+    check('session: a note starts on the conversation that wrote it', () => {
+      assert.equal(findAll(scene.tree, (node) => node.props?.className === 'dwa-bubble').length, 1, 'no bead for the first session')
+      assert.ok(log.draft.includes('这一条只属于第一个会话'), 'the line never reached the draft')
+    })
+
+    // Switching conversations must not carry the bead over, nor let the new
+    // session's prune sweep delete the old line.
+    useSessions.switchTo('s2')
+    scene.tree = scene.mount()
+    await settle(runtime, scene.mount)
+    scene.tree = scene.mount()
+
+    check('session: another conversation does not inherit the beads', () => {
+      assert.equal(findAll(scene.tree, (node) => node.props?.className === 'dwa-bubble').length, 0, 'the bead followed the switch')
+      assert.equal(find(scene.tree, (node) => node.props?.className === 'dwa-tool-count'), null, 'the ledger followed the switch')
+      assert.ok(log.draft.includes('这一条只属于第一个会话'), 'the switch touched the first session draft')
+      assert.equal(log.setDrafts.length, 0, 'the switch rewrote the draft')
+    })
+
+    useSessions.switchTo('s1')
+    scene.tree = scene.mount()
+    await settle(runtime, scene.mount)
+    scene.tree = scene.mount()
+
+    check('session: switching back brings the note back', () => {
+      const beads = findAll(scene.tree, (node) => node.props?.className === 'dwa-bubble')
+      assert.equal(beads.length, 1, 'the bead was lost with its session')
+      assert.equal(textOf(beads[0]), '1', 'the bead lost its number')
+    })
+
+    // The composer can be emptied by sending before the 900 ms prune ever saw
+    // the line. The bead must still turn into a record instead of lingering as
+    // a draft forever.
+    log.draft = ''
+    for (const timer of timers) timer()
+    await runtime.flush()
+    scene.tree = scene.mount()
+
+    check('session: a bead becomes a record once the composer is empty', () => {
+      const bead = find(scene.tree, (node) => node.props?.className === 'dwa-bubble')
+      assert.ok(bead, 'the bead vanished instead of becoming a record')
+      assert.equal(bead.props['data-ghost'], '1', 'the bead still says it is drafting')
+    })
+  } finally {
+    globalThis.setInterval = realSetInterval
+    globalThis.clearInterval = realClearInterval
+  }
+}
+
+// ================================================== scenario G: sheet preview
+async function scenarioSheet() {
+  const runtime = createRuntime()
+  const plugin = loadModule(runtime)
+  const { ctx, useSessions, log } = makeComposer()
+  const canvasLog = []
+
+  // A plain HTML table, no ARIA row/col attributes: the row and column have to
+  // come from the DOM's own zero-based `rowIndex` and `cellIndex`.
+  const table = new FakeNode('table', { 'data-sheet-name': 'Sheet1' }, rect(300, 310, 640, 96))
+  for (let row = 0; row < 3; row += 1) {
+    const tr = new FakeNode('tr', {}, rect(300, 310 + row * 32, 640, 32))
+    tr.rowIndex = row
+    for (let col = 0; col < 3; col += 1) {
+      const td = new FakeNode('td', {}, rect(300 + col * 120, 310 + row * 32, 120, 32), [], `R${row + 1}C${col + 1}`)
+      td.cellIndex = col
+      tr.append(td)
+    }
+    table.append(tr)
+  }
+  // A canvas-like scrim over the grid: the element under the pointer is not a
+  // cell, so the range has to be recovered from the cells that overlap the box.
+  const scrim = new FakeNode('div', { className: 'dwa-fake-scrim' }, rect(300, 310, 640, 96))
+  const body = new FakeNode('div', { 'data-textpreview-body': '' }, rect(260, 100, 1020, 760), [table, scrim])
+  const root = new FakeNode('div', {
+    'data-document-preview': 'sheet',
+    'data-textpreview-url': 'file:///data/a.xlsx',
+  }, rect(260, 100, 1020, 760), [
+    new FakeNode('div', { 'data-textpreview-path': '' }, rect(260, 100, 1020, 24), [], 'data/a.xlsx'),
+    body,
+  ])
+  globalThis.document = fakeDocument([root], canvasLog)
+  globalThis.Image = FakeImage
+
+  const scene = await mountScenario({ runtime, plugin, ctx, useSessions, stage: rect(260, 100, 1020, 760) })
+  const trigger = find(scene.tree, (node) => node.type === 'button' && node.props?.className === 'dwa-tool')
+  trigger.props.onClick({ preventDefault() {}, stopPropagation() {} })
+  await settle(runtime, scene.mount)
+  scene.tree = scene.mount()
+
+  const stageNode = find(scene.tree, (node) => node.props?.className === 'dwa-stage')
+  stageNode.props.onPointerDown({ button: 0, pointerId: 1, clientX: 305, clientY: 315, currentTarget: { setPointerCapture() {} } })
+  stageNode.props.onPointerMove({ clientX: 470, clientY: 355 })
+  stageNode.props.onPointerUp({ clientX: 470, clientY: 355 })
+  await settle(runtime, scene.mount)
+  scene.tree = scene.mount()
+
+  find(scene.tree, (node) => node.type === 'textarea').props.onChange({ target: { value: '这两行数字对不上' } })
+  await runtime.flush()
+  scene.tree = scene.mount()
+  find(scene.tree, (node) => node.type === 'textarea').props.onKeyDown({ key: 'Enter', shiftKey: false, preventDefault() {} })
+  await settle(runtime, scene.mount)
+  scene.tree = scene.mount()
+
+  check('sheet: the anchor names the cell range, not just the file', () => {
+    assert.equal(log.inits.length, 1, 'the line never reached the draft')
+    const prompt = log.inits[0].prompt
+    assert.match(prompt, /data\/a\.xlsx/, `the file went missing: ${prompt}`)
+    assert.match(prompt, /Sheet1!A1:B2/, `the cell range is wrong or missing: ${prompt}`)
+  })
+}
+
 await scenarioPage()
 await scenarioText()
 await scenarioPdf()
 await scenarioImage()
 await scenarioSelection()
+await scenarioSessionSwitch()
+await scenarioSheet()
 
 console.log(`ok — ${checks.length} checks`)
 for (const label of checks) console.log('  ✓', label)
