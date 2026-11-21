@@ -1966,6 +1966,16 @@ window.__ModuleLoader__.load({
           const draft = readDraft(services)
           const next = pruneBeads(sent, draft, phase)
           if (!next) return
+          // A line deleted by hand takes its record away; the thumbnail object
+          // URL has to go with it, or the blob outlives the note.
+          const kept = new Set(next.map((entry) => entry.order))
+          for (const entry of sent) {
+            if (kept.has(entry.order)) continue
+            const url = thumbsRef.current[entry.order]
+            if (!url) continue
+            try { URL.revokeObjectURL(url) } catch { /* already gone */ }
+            delete thumbsRef.current[entry.order]
+          }
           // The composer released a sent message's attachments, so keeping the
           // old ids would let the ledger claim a picture that no longer exists.
           const already = new Set(sent.filter((entry) => entry.ghost).map((entry) => entry.order))
