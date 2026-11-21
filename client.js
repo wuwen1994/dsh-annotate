@@ -1491,6 +1491,9 @@ window.__ModuleLoader__.load({
       // First-run nudge; a successful first insertion in this browser wins.
       const [hint, setHint] = useState(false)
       const [picking, setPicking] = useState(false)
+      // Bumped when a new markup round opens. Records keep their bead only in
+      // the round that pushed them; later rounds leave them to the ledger.
+      const [round, setRound] = useState(0)
 
       const viewRef = useRef(null)
       const viewVisibilityRef = useRef('')
@@ -1509,6 +1512,8 @@ window.__ModuleLoader__.load({
       // region twice before React re-renders the read-only textarea.
       const writingRef = useRef(false)
       const seqRef = useRef(0)
+      // The markup round in progress; entries carry the round they were made in.
+      const roundRef = useRef(0)
       const sentRef = useRef([])
       const boxesRef = useRef([])
       // A region an element pick handed over, applied once the freeze lands
@@ -1768,6 +1773,10 @@ window.__ModuleLoader__.load({
         }
         setError('')
         setBusy(true)
+        // A new markup session is a new round: beads pushed in the last round
+        // step off the canvas, while the ledger keeps them for a second look.
+        roundRef.current += 1
+        setRound(roundRef.current)
         try {
           const width = Math.max(1, Math.round(found.rect.width))
           const height = Math.max(1, Math.round(found.rect.height))
@@ -2227,6 +2236,9 @@ window.__ModuleLoader__.load({
             // The conversation this note was written in: the ledger is parked
             // per session, and a stale render must never write it elsewhere.
             session: sessionId,
+            // The markup round it belongs to. A record keeps its bead only in
+            // the round that pushed it; the next round leaves it to the ledger.
+            round: roundRef.current,
             // Kept on the entry: the bead can be reopened long after the shot
             // is gone, and a re-check needs to know which file and quote it meant.
             source: shape,
@@ -2409,6 +2421,7 @@ window.__ModuleLoader__.load({
               line: item.line,
               box: item.box,
               session: sessionId,
+              round: roundRef.current,
               source: shape,
               live: shot.mode === 'live',
               paneKind: source.kind,
@@ -2587,6 +2600,9 @@ window.__ModuleLoader__.load({
                   ...row,
                   session: sessionId,
                   ghost: true,
+                  // A saved record is not part of any round in progress: the
+                  // canvas stays clean and the ledger offers it back.
+                  round: -1,
                   ids: [],
                   thumb: '',
                   stale: false,
@@ -2600,7 +2616,7 @@ window.__ModuleLoader__.load({
           saved = { rows, persist: rows.length > 0 }
           if (sessionId) ledgersRef.current.set(sessionId, saved)
         }
-        setSent(saved.rows)
+        setSent(saved.rows.map((row) => (row.ghost ? { ...row, round: -1 } : row)))
         setPersist(saved.persist)
         setEditing(null)
         setHover(null)
@@ -2720,7 +2736,11 @@ window.__ModuleLoader__.load({
 
       // Beads stay on the page (also after the overlay closes) until the whole
       // draft goes out, so a note can always be found and edited again.
-      const beads = sent.map((entry) => {
+      // Only the current round's records keep a bead on the canvas; a record
+      // from an earlier round lives in the ledger, one click away.
+      const beads = sent
+        .filter((entry) => !entry.ghost || entry.round === round)
+        .map((entry) => {
         const point = bubblePoint(entry)
         if (!point) return null
         return el('button', {
@@ -2747,7 +2767,9 @@ window.__ModuleLoader__.load({
 
       // The picture a bead stands for, shown only while the pointer rests on it:
       // deleting a region is easier when its crop can be seen first.
-      const hoverEntry = hover === null ? null : sent.find((entry) => entry.order === hover) || null
+      const hoverEntry = hover === null
+        ? null
+        : sent.find((entry) => entry.order === hover && (!entry.ghost || entry.round === round)) || null
       const hoverAt = hoverEntry ? bubblePoint(hoverEntry) : null
       const hoverThumb = hoverEntry && hoverEntry.thumb && hoverAt
         ? el('img', {

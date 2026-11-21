@@ -1365,34 +1365,9 @@ async function scenarioSessionSwitch() {
       assert.ok(log.draft.includes('这一条只属于第一个会话'), 'the line never reached the draft')
     })
 
-    // Switching conversations must not carry the bead over, nor let the new
-    // session's prune sweep delete the old line.
-    useSessions.switchTo('s2')
-    scene.tree = scene.mount()
-    await settle(runtime, scene.mount)
-    scene.tree = scene.mount()
-
-    check('session: another conversation does not inherit the beads', () => {
-      assert.equal(findAll(scene.tree, (node) => node.props?.className === 'dwa-bubble').length, 0, 'the bead followed the switch')
-      assert.equal(find(scene.tree, (node) => node.props?.className === 'dwa-tool-count'), null, 'the ledger followed the switch')
-      assert.ok(log.draft.includes('这一条只属于第一个会话'), 'the switch touched the first session draft')
-      assert.equal(log.setDrafts.length, 0, 'the switch rewrote the draft')
-    })
-
-    useSessions.switchTo('s1')
-    scene.tree = scene.mount()
-    await settle(runtime, scene.mount)
-    scene.tree = scene.mount()
-
-    check('session: switching back brings the note back', () => {
-      const beads = findAll(scene.tree, (node) => node.props?.className === 'dwa-bubble')
-      assert.equal(beads.length, 1, 'the bead was lost with its session')
-      assert.equal(textOf(beads[0]), '1', 'the bead lost its number')
-    })
-
     // The composer can be emptied by sending before the 900 ms prune ever saw
     // the line. The bead must still turn into a record instead of lingering as
-    // a draft forever.
+    // a draft forever. It keeps its bead for the rest of this round.
     log.draft = ''
     for (const timer of timers) timer()
     await runtime.flush()
@@ -1402,6 +1377,61 @@ async function scenarioSessionSwitch() {
       const bead = find(scene.tree, (node) => node.props?.className === 'dwa-bubble')
       assert.ok(bead, 'the bead vanished instead of becoming a record')
       assert.equal(bead.props['data-ghost'], '1', 'the bead still says it is drafting')
+    })
+
+    // The next markup round starts on a clean canvas: the record waits in the
+    // ledger instead of floating over the next round's page.
+    const freezeForExit = find(scene.tree, (node) => node.props?.className === 'dwa-freeze')
+    freezeForExit.props.onContextMenu({ preventDefault() {}, stopPropagation() {} })
+    await settle(runtime, scene.mount)
+    scene.tree = scene.mount()
+    const triggerAgain = find(scene.tree, (node) => node.type === 'button' && node.props?.className === 'dwa-tool')
+    triggerAgain.props.onClick({ preventDefault() {}, stopPropagation() {} })
+    await settle(runtime, scene.mount)
+    scene.tree = scene.mount()
+
+    check('session: a new round leaves the old record to the ledger', () => {
+      assert.equal(findAll(scene.tree, (node) => node.props?.className === 'dwa-bubble').length, 0, 'the old record is still on the canvas')
+    })
+
+    // Leave marking again: the toolbar (and its ledger count) is only drawn
+    // outside the freeze, and the record has to still be counted there.
+    const freezeAgain = find(scene.tree, (node) => node.props?.className === 'dwa-freeze')
+    freezeAgain.props.onContextMenu({ preventDefault() {}, stopPropagation() {} })
+    await settle(runtime, scene.mount)
+    scene.tree = scene.mount()
+
+    check('session: the ledger still counts the old record', () => {
+      const count = find(scene.tree, (node) => node.props?.className === 'dwa-tool-count')
+      assert.ok(count, 'the ledger lost the record')
+      assert.equal(textOf(count), '1', 'the ledger count is wrong')
+    })
+
+    // Switching conversations must not carry the record over, nor let the new
+    // session's prune sweep delete the old line.
+    useSessions.switchTo('s2')
+    scene.tree = scene.mount()
+    await settle(runtime, scene.mount)
+    scene.tree = scene.mount()
+
+    check('session: another conversation does not inherit the beads', () => {
+      assert.equal(findAll(scene.tree, (node) => node.props?.className === 'dwa-bubble').length, 0, 'the bead followed the switch')
+      assert.equal(find(scene.tree, (node) => node.props?.className === 'dwa-tool-count'), null, 'the ledger followed the switch')
+      assert.equal(log.draft, '', 'the switch rewrote the composer draft')
+      assert.equal(log.setDrafts.length, 0, 'the switch rewrote the draft')
+    })
+
+    useSessions.switchTo('s1')
+    scene.tree = scene.mount()
+    await settle(runtime, scene.mount)
+    scene.tree = scene.mount()
+
+    check('session: a record from an earlier round stays in the ledger', () => {
+      const beads = findAll(scene.tree, (node) => node.props?.className === 'dwa-bubble')
+      assert.equal(beads.length, 0, 'an old record came back onto the canvas')
+      const count = find(scene.tree, (node) => node.props?.className === 'dwa-tool-count')
+      assert.ok(count, 'the ledger lost the record')
+      assert.equal(textOf(count), '1', 'the ledger count is wrong')
     })
   } finally {
     globalThis.setInterval = realSetInterval
