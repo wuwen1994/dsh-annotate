@@ -646,6 +646,17 @@ async function scenarioPage() {
     assert.ok(find(scene.tree, (node) => node.type === 'textarea'), 'no note box')
   })
 
+  check('page: the floating card paints a solid surface', () => {
+    const style = find(scene.tree, (node) => node.type === 'style')
+    assert.ok(style, 'no style node')
+    const css = (style.children ?? []).map((child) => (typeof child === 'string' ? child : textOf(child))).join('')
+    const start = css.indexOf('.dwa-sheet {')
+    assert.ok(start >= 0, `no card rule in ${css.length} chars of css`)
+    const rule = css.slice(start, css.indexOf('}', start) + 1)
+    assert.ok(rule.includes('--dsw-alias-bg-layer-3'), 'the card still uses a see-through surface')
+    assert.ok(!rule.includes('--dsw-specific-menu'), 'the card still leans on the host menu token, which carries alpha')
+  })
+
   // A second region near the right edge must flip the editor to its left.
   stageNode.props.onPointerDown({ button: 0, pointerId: 2, clientX: 1150, clientY: 300, currentTarget: { setPointerCapture() {} } })
   stageNode.props.onPointerMove({ clientX: 1250, clientY: 380 })

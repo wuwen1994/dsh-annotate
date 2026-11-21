@@ -278,9 +278,12 @@ window.__ModuleLoader__.load({
       .dwa-sb-box[data-inside='1'] .dwa-sb-n { top: 2px; left: 2px; }
       .dwa-sb-ghost { position: absolute; border: 1px dashed #e5484d; background: rgba(229,72,77,.1); }
 
+      /* Solid on purpose: the host's menu token carries alpha (light #f8f9fa94,
+         dark #30313680), and a card floating over a page must not let the words
+         underneath show through. --dsw-alias-bg-layer-3 is the opaque layer. */
       .dwa-sheet { position: fixed; z-index: 1401; width: min(320px, calc(100vw - 24px)); max-height: calc(100vh - 20px); overflow-y: auto; display: flex; flex-direction: column; gap: 6px;
         padding: 8px 10px 10px; border-radius: var(--dsw-radius-lg, 10px);
-        background: var(--dsw-specific-menu, rgba(255,255,255,.96));
+        background: var(--dsw-alias-bg-layer-3, #fff);
         border: 1px solid var(--dsw-alias-border-l1, rgba(0,0,0,.1)); box-shadow: 0 10px 30px rgba(0,0,0,.28); }
       .dwa-sheet[data-compact='1'] { padding: 6px 8px; }
       .dwa-sheet-bar { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
