@@ -820,8 +820,8 @@ async function scenarioPage() {
     assert.ok(find(scene.tree, (node) => node.props?.className === 'dwa-bubble'), 'the beads disappeared after an edit')
   })
 
-  // Sending is the only thing that retires the beads. The pruners were grabbed
-  // above; run them all, newest last, once the composer reports it is sending.
+  // Sending is the only thing that retires the beads: the whole batch goes at
+  // once, and nothing is kept afterwards as a record.
   try {
     assert.ok(pruners.length > 0, 'no pruner was registered')
     log.phase = 'sending'
@@ -829,17 +829,15 @@ async function scenarioPage() {
     await runtime.flush()
     scene.tree = scene.mount()
 
-    check('page: sending the prompt turns the beads into records', () => {
-      const beads = findAll(scene.tree, (node) => node.props?.className === 'dwa-bubble')
-      assert.equal(beads.length, 1, 'the bead vanished with the send')
-      assert.equal(beads[0].props['data-ghost'], '1', 'the sent bead is not marked as sent')
+    check('page: sending the prompt retires every bead', () => {
+      assert.equal(findAll(scene.tree, (node) => node.props?.className === 'dwa-bubble').length, 0, 'a bubble outlived the send')
     })
 
     check('page: the regions still open keep their numbers', () => {
       assert.deepEqual(
         findAll(scene.tree, (node) => node.props?.className === 'dwa-sb-n').map(textOf),
         ['2', '3'],
-        'the live regions were renumbered after a send',
+        'the open regions were renumbered after a send',
       )
     })
   } finally {
@@ -849,29 +847,8 @@ async function scenarioPage() {
 
   log.phase = 'plain'
 
-  // The bead from the send is still there, as a record: it opens without an
-  // editor, and closing it drops the record without touching the composer.
-  find(scene.tree, (node) => node.props?.className === 'dwa-bubble').props.onClick({ preventDefault() {}, stopPropagation() {} })
-  await runtime.flush()
-  scene.tree = scene.mount()
-
-  check('page: a sent bead reopens as a record, not an editor', () => {
-    assert.equal(find(scene.tree, (node) => node.type === 'textarea'), null, 'a sent bead offered a text box')
-    assert.ok(find(scene.tree, (node) => node.props?.className === 'dwa-actions'), 'the record has no actions')
-  })
-
-  find(scene.tree, (node) => node.props?.className === 'dwa-x').props.onClick()
-  await runtime.flush()
-  scene.tree = scene.mount()
-
-  check('page: closing a sent bead only closes its card', () => {
-    const beads = findAll(scene.tree, (node) => node.props?.className === 'dwa-bubble')
-    assert.equal(beads.length, 1, 'closing the record dropped the note')
-    assert.equal(find(scene.tree, (node) => node.props?.className === 'dwa-actions'), null, 'the record card stayed open')
-    assert.equal(log.setDrafts.length, 1, 'a record edit rewrote the draft')
-  })
-
-  // An open region is still numbered after the ones already sent.
+  // A region that stayed open while the batch went out can still be inserted,
+  // and it keeps the number it was drawn with.
   find(scene.tree, (node) => node.props?.className === 'dwa-sb-box').props.onClick({ preventDefault() {}, stopPropagation() {} })
   await runtime.flush()
   scene.tree = scene.mount()
@@ -880,17 +857,13 @@ async function scenarioPage() {
   scene.tree = scene.mount()
   const freshLine = log.inits[log.inits.length - 1].prompt
 
-  check('page: numbering does not restart after a send', () => {
+  check('page: an open region keeps its number after a send', () => {
     const bubbles = findAll(scene.tree, (node) => node.props?.className === 'dwa-bubble')
-    assert.ok(bubbles.length >= 2, 'no bead was created')
-    assert.equal(bubbles[bubbles.length - 1].children[0], '2', 'the bead reused a number that had already gone out')
+    assert.equal(bubbles.length, 1, 'the inserted region has no bead')
+    assert.equal(bubbles[0].children[0], '2', 'the region was renumbered')
   })
 
-  const lastBubble = () => {
-    const all = findAll(scene.tree, (node) => node.props?.className === 'dwa-bubble')
-    return all[all.length - 1]
-  }
-  lastBubble().props.onClick({ preventDefault() {}, stopPropagation() {} })
+  find(scene.tree, (node) => node.props?.className === 'dwa-bubble').props.onClick({ preventDefault() {}, stopPropagation() {} })
   await runtime.flush()
   scene.tree = scene.mount()
   find(scene.tree, (node) => node.props?.className === 'dwa-x').props.onClick()
@@ -898,9 +871,7 @@ async function scenarioPage() {
   scene.tree = scene.mount()
 
   check('page: closing the bead deletes it and its line', () => {
-    const left = findAll(scene.tree, (node) => node.props?.className === 'dwa-bubble')
-    assert.equal(left.length, 1, 'the live bead or the sent record went with the close')
-    assert.equal(left[0].props['data-ghost'], '1', 'the bead that stayed is not the sent record')
+    assert.equal(findAll(scene.tree, (node) => node.props?.className === 'dwa-bubble').length, 0, 'the bead survived the close')
     const written = log.setDrafts[log.setDrafts.length - 1]
     assert.ok(typeof written === 'string', 'the draft was never rewritten')
     assert.ok(!written.includes(freshLine), 'the line stayed in the prompt')
@@ -928,8 +899,7 @@ async function scenarioPage() {
     assert.equal(find(scene.tree, (node) => node.props?.className === 'dwa-sb-box'), null, 'the regions survived the right click')
   })
 
-  // Cancelling a session does not hand numbers back out: the sent record keeps
-  // its number for good, and the next region carries on after it.
+  // A new marking session is a new batch: the count starts at 1 again.
   find(scene.tree, (node) => node.type === 'button' && node.props?.className === 'dwa-tool').props.onClick({ preventDefault() {}, stopPropagation() {} })
   await settle(runtime, scene.mount)
   scene.tree = scene.mount()
@@ -940,11 +910,11 @@ async function scenarioPage() {
   await settle(runtime, scene.mount)
   scene.tree = scene.mount()
 
-  check('page: a new session numbers after the sent record', () => {
+  check('page: a new batch starts at 1', () => {
     assert.deepEqual(
       findAll(scene.tree, (node) => node.props?.className === 'dwa-sb-n').map(textOf),
-      ['2'],
-      'the number went back to one and collided with a line that was already sent',
+      ['1'],
+      'the new batch did not start at one',
     )
   })
 
@@ -1377,49 +1347,18 @@ async function scenarioSessionSwitch() {
     })
 
     // The composer can be emptied by sending before the 900 ms prune ever saw
-    // the line. The bead must still turn into a record instead of lingering as
-    // a draft forever. It keeps its bead for the rest of this round.
+    // the line. Nothing is kept: the bead goes with the draft it belonged to.
     log.draft = ''
     for (const timer of timers) timer()
     await runtime.flush()
     scene.tree = scene.mount()
 
-    check('session: a bead becomes a record once the composer is empty', () => {
-      const bead = find(scene.tree, (node) => node.props?.className === 'dwa-bubble')
-      assert.ok(bead, 'the bead vanished instead of becoming a record')
-      assert.equal(bead.props['data-ghost'], '1', 'the bead still says it is drafting')
+    check('session: an emptied composer takes the bead with it', () => {
+      assert.equal(findAll(scene.tree, (node) => node.props?.className === 'dwa-bubble').length, 0, 'the bead outlived its draft')
     })
 
-    // The next markup round starts on a clean canvas: the record waits in the
-    // ledger instead of floating over the next round's page.
-    const freezeForExit = find(scene.tree, (node) => node.props?.className === 'dwa-freeze')
-    freezeForExit.props.onContextMenu({ preventDefault() {}, stopPropagation() {} })
-    await settle(runtime, scene.mount)
-    scene.tree = scene.mount()
-    const triggerAgain = find(scene.tree, (node) => node.type === 'button' && node.props?.className === 'dwa-tool')
-    triggerAgain.props.onClick({ preventDefault() {}, stopPropagation() {} })
-    await settle(runtime, scene.mount)
-    scene.tree = scene.mount()
-
-    check('session: a new round leaves the old record to the ledger', () => {
-      assert.equal(findAll(scene.tree, (node) => node.props?.className === 'dwa-bubble').length, 0, 'the old record is still on the canvas')
-    })
-
-    // Leave marking again: the toolbar (and its ledger count) is only drawn
-    // outside the freeze, and the record has to still be counted there.
-    const freezeAgain = find(scene.tree, (node) => node.props?.className === 'dwa-freeze')
-    freezeAgain.props.onContextMenu({ preventDefault() {}, stopPropagation() {} })
-    await settle(runtime, scene.mount)
-    scene.tree = scene.mount()
-
-    check('session: the ledger still counts the old record', () => {
-      const count = find(scene.tree, (node) => node.props?.className === 'dwa-tool-count')
-      assert.ok(count, 'the ledger lost the record')
-      assert.equal(textOf(count), '1', 'the ledger count is wrong')
-    })
-
-    // Switching conversations must not carry the record over, nor let the new
-    // session's prune sweep delete the old line.
+    // The overlay outlives a conversation switch. A new conversation starts on
+    // an empty page: no beads, no count, and the draft is untouched.
     useSessions.switchTo('s2')
     scene.tree = scene.mount()
     await settle(runtime, scene.mount)
@@ -1427,7 +1366,6 @@ async function scenarioSessionSwitch() {
 
     check('session: another conversation does not inherit the beads', () => {
       assert.equal(findAll(scene.tree, (node) => node.props?.className === 'dwa-bubble').length, 0, 'the bead followed the switch')
-      assert.equal(find(scene.tree, (node) => node.props?.className === 'dwa-tool-count'), null, 'the ledger followed the switch')
       assert.equal(log.draft, '', 'the switch rewrote the composer draft')
       assert.equal(log.setDrafts.length, 0, 'the switch rewrote the draft')
     })
@@ -1437,12 +1375,8 @@ async function scenarioSessionSwitch() {
     await settle(runtime, scene.mount)
     scene.tree = scene.mount()
 
-    check('session: a record from an earlier round stays in the ledger', () => {
-      const beads = findAll(scene.tree, (node) => node.props?.className === 'dwa-bubble')
-      assert.equal(beads.length, 0, 'an old record came back onto the canvas')
-      const count = find(scene.tree, (node) => node.props?.className === 'dwa-tool-count')
-      assert.ok(count, 'the ledger lost the record')
-      assert.equal(textOf(count), '1', 'the ledger count is wrong')
+    check('session: switching back does not restore a record', () => {
+      assert.equal(findAll(scene.tree, (node) => node.props?.className === 'dwa-bubble').length, 0, 'a record came back onto the canvas')
     })
   } finally {
     globalThis.setInterval = realSetInterval

@@ -28,14 +28,12 @@ window.__ModuleLoader__.load({
     const CROP_QUALITY = 0.9
     /** Breathing room around a drawn box: boxes often clip the line they mark. */
     const CROP_PAD = 8
-    const LEDGER_KEY = 'dsh-annotate.ledger'
     const HINT_KEY = 'dsh-annotate.hint'
 
     /** localStorage that never throws: private mode and quotas are not errors. */
     const store = {
       get(key) { try { return window.localStorage.getItem(key) || '' } catch { return '' } },
       set(key, value) { try { window.localStorage.setItem(key, value) } catch { /* private mode */ } },
-      del(key) { try { window.localStorage.removeItem(key) } catch { /* private mode */ } },
     }
 
     const ZH = {
@@ -79,30 +77,9 @@ window.__ModuleLoader__.load({
       thisFile: '这个文件',
       insertAll: '全部插入 · {count} 处',
       insertAllBusy: '正在插入 {count} 处…',
-      ledgerTitle: '本轮批注 · {count} 条',
-      ledgerButton: '本轮 {count}',
-      ledgerEmpty: '这一轮还没有插入过批注。',
-      ledgerSent: '已发送',
-      ledgerDraft: '草稿中',
-      ledgerReinsert: '再插一次',
-      ledgerRemove: '移除气泡',
-      ledgerCopy: '复制这一行',
-      ledgerClear: '清空已发送',
-      ledgerPersist: '记住这一轮（刷新后仍在）',
-      ledgerRestored: '已恢复这一轮 {count} 条批注。',
-      ghostHint: '已发送 · 点击查看或再插一次',
-      staleBadge: '！',
-      staleNotice: '这条批注对应的原文可能已经变了。',
-      staleOriginal: '原引文',
-      staleCurrent: '现在的文字',
-      staleReverify: '重新检查',
       pickElement: '拾取元素',
       pickHint: '移动鼠标高亮，单击选中',
       pickFailed: '这一页暂时无法拾取元素。',
-      jumpFailed: '这一页已经不在右侧栏，无法跳转；这一行已复制。',
-      copied: '已复制这一行。',
-      copyFailed: '复制失败：浏览器没有允许访问剪贴板。',
-      checkAnchor: '检查是否过期',
       cellRange: '{sheet}!{from}:{to}',
       cellSolo: '{sheet}!{cell}',
     }
@@ -148,30 +125,9 @@ window.__ModuleLoader__.load({
       thisFile: 'this file',
       insertAll: 'Insert all · {count}',
       insertAllBusy: 'Inserting {count}…',
-      ledgerTitle: 'Notes this round · {count}',
-      ledgerButton: 'This round · {count}',
-      ledgerEmpty: 'Nothing has been inserted yet this round.',
-      ledgerSent: 'sent',
-      ledgerDraft: 'in draft',
-      ledgerReinsert: 'Insert again',
-      ledgerRemove: 'Remove bubble',
-      ledgerCopy: 'Copy this line',
-      ledgerClear: 'Clear sent',
-      ledgerPersist: 'Remember this round (survives a reload)',
-      ledgerRestored: 'Restored {count} notes from this round.',
-      ghostHint: 'Sent · click to review or insert again',
-      staleBadge: '!',
-      staleNotice: 'The text this note was drawn on may have changed.',
-      staleOriginal: 'original quote',
-      staleCurrent: 'current text',
-      staleReverify: 'Check again',
       pickElement: 'Pick element',
       pickHint: 'Move to highlight, click to pick',
       pickFailed: 'This page cannot be inspected right now.',
-      jumpFailed: 'That page is no longer in the sidebar; the line was copied instead.',
-      copied: 'Line copied.',
-      copyFailed: 'Could not copy: the clipboard was refused.',
-      checkAnchor: 'Check for changes',
       cellRange: '{sheet}!{from}:{to}',
       cellSolo: '{sheet}!{cell}',
     }
@@ -305,10 +261,6 @@ window.__ModuleLoader__.load({
         color: var(--dsw-alias-label-tertiary, #8a8f98); font: inherit; font-size: 13px; line-height: 1; cursor: pointer; }
       .dwa-x:hover { background: var(--dsw-alias-interactive-bg-hover, rgba(127,127,127,.14)); color: var(--dsw-alias-label-primary, #111); }
 
-      /* A sent note keeps its bead as a ghost: reviewable, not in the draft. */
-      .dwa-bubble[data-ghost='1'] { background: rgba(92,101,116,.55); box-shadow: 0 2px 8px rgba(0,0,0,.18); }
-      .dwa-bubble[data-ghost='1']:hover { background: rgba(92,101,116,.8); }
-      .dwa-bubble[data-stale='1'] { box-shadow: 0 0 0 2px #e5484d, 0 2px 10px rgba(24,60,140,.32); }
       .dwa-bubble-thumb { position: fixed; z-index: 1403; max-width: 190px; max-height: 150px; border-radius: var(--dsw-radius-sm, 6px);
         border: 1px solid var(--dsw-alias-border-l1, rgba(0,0,0,.16)); box-shadow: 0 8px 22px rgba(0,0,0,.28);
         background: #fff; object-fit: contain; pointer-events: none; }
@@ -319,23 +271,7 @@ window.__ModuleLoader__.load({
       .dwa-btn:hover { background: var(--dsw-alias-interactive-bg-hover, rgba(127,127,127,.12)); }
       .dwa-btn[data-primary='1'] { background: var(--dsw-alias-brand-primary, #3b82f6); border-color: transparent; color: #fff; }
       .dwa-btn[disabled] { opacity: .5; cursor: default; }
-      .dwa-tool-count { font-size: 11px; font-weight: 600; line-height: 1; }
       .dwa-actions { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
-      .dwa-stale { padding: 4px 8px; border-radius: var(--dsw-radius-sm, 6px); background: rgba(229,72,77,.1);
-        color: #b8353a; font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; }
-      .dwa-stale b { font-weight: 600; }
-      .dwa-ledger { position: fixed; z-index: 1403; width: min(340px, calc(100vw - 24px)); max-height: 58vh; overflow-y: auto;
-        display: flex; flex-direction: column; gap: 6px; padding: 8px 10px; border-radius: var(--dsw-radius-lg, 10px);
-        background: var(--dsw-specific-menu, #fff); border: 1px solid var(--dsw-alias-border-l1, rgba(0,0,0,.12));
-        box-shadow: 0 10px 30px rgba(0,0,0,.28); font-size: 12px; }
-      .dwa-ledger-head { display: flex; align-items: center; gap: 6px; }
-      .dwa-ledger-row { display: flex; align-items: flex-start; gap: 6px; padding: 4px 0; border-top: 1px solid var(--dsw-alias-border-l1, rgba(0,0,0,.08)); }
-      .dwa-ledger-row:first-of-type { border-top: 0; }
-      .dwa-ledger-n { flex: 0 0 auto; min-width: 18px; height: 18px; border-radius: 999px; background: rgba(38,94,214,.85); color: #fff;
-        font-size: 11px; line-height: 18px; text-align: center; }
-      .dwa-ledger-text { flex: 1; min-width: 0; }
-      .dwa-ledger-note { color: var(--dsw-alias-label-primary, #111); overflow-wrap: anywhere; }
-      .dwa-ledger-meta { color: var(--dsw-alias-label-tertiary, #8a8f98); font-size: 11px; overflow-wrap: anywhere; }
     `
 
     function FrameIcon() {
@@ -1311,28 +1247,21 @@ window.__ModuleLoader__.load({
      * A bead is dropped once its line is gone from the draft, but only after we
      * have seen that line land there — otherwise the insert itself (which is
      * asynchronous) would look like a send. While the prompt is on its way out
-     * the note becomes a ghost: sent, still clickable, out of the composer. A
-     * hand-deleted line keeps the ghost too, so a select-all never eats notes.
+     * the composer is about to clear its draft, so every bead goes with it.
      */
     function pruneBeads(entries, draft, phase) {
       if (!entries.length) return null
+      // The prompt is being sent: the composer will drop its draft, and the
+      // bubbles have nothing left to edit. No record is kept.
+      if (phase === 'submitting' || phase === 'sending') return []
       const lines = draft.split('\n')
-      const sending = phase === 'submitting' || phase === 'sending'
-      // Once the prompt is on its way out the composer is about to drop its
-      // draft, so every note has been sent: ghost them all, before the draft
-      // even clears. Waiting for the line to go missing would miss a fast send.
-      if (sending) {
-        if (!entries.some((entry) => !entry.ghost)) return null
-        return entries.map((entry) => (entry.ghost ? entry : { ...entry, ghost: true }))
-      }
-      let touched = false
-      const next = []
       // An empty draft after a write means the line went out (or was cleared):
       // no bead should keep pretending its note is still editable in a composer
       // that no longer holds it. This also catches a send that outpaced the poll.
       const empty = draft.trim() === ''
+      let touched = false
+      const next = []
       for (const entry of entries) {
-        if (entry.ghost) { next.push(entry); continue }
         const exact = lines.find((line) => flatLine(line) === flatLine(entry.line))
         // Edited by hand: keep the entry and remember the text that is actually
         // there, so the next rewrite finds it again.
@@ -1345,9 +1274,6 @@ window.__ModuleLoader__.load({
         // A missing line that was never observed here can still be a write in
         // flight; only an emptied composer proves the note left the draft.
         if (!entry.seen && !empty) { next.push(entry); continue }
-        // Seen and gone: sent, or hand-deleted. Either way the row stays as a
-        // ghost, so a select-all in the composer never eats the record of a send.
-        next.push({ ...entry, ghost: true })
         touched = true
       }
       return touched ? next : null
@@ -1488,15 +1414,9 @@ window.__ModuleLoader__.load({
       const [errorAction, setErrorAction] = useState(null)
       // Which bead the pointer is over: only then is its crop preview shown.
       const [hover, setHover] = useState(null)
-      // The session ledger: one row per note pushed in this conversation.
-      const [panel, setPanel] = useState(false)
-      const [persist, setPersist] = useState(false)
       // First-run nudge; a successful first insertion in this browser wins.
       const [hint, setHint] = useState(false)
       const [picking, setPicking] = useState(false)
-      // Bumped when a new markup round opens. Records keep their bead only in
-      // the round that pushed them; later rounds leave them to the ledger.
-      const [round, setRound] = useState(0)
 
       const viewRef = useRef(null)
       const viewVisibilityRef = useRef('')
@@ -1514,11 +1434,14 @@ window.__ModuleLoader__.load({
       // One write at a time: holding down Enter would otherwise push the same
       // region twice before React re-renders the read-only textarea.
       const writingRef = useRef(false)
-      const seqRef = useRef(0)
-      // The markup round in progress; entries carry the round they were made in.
-      const roundRef = useRef(0)
       const sentRef = useRef([])
       const boxesRef = useRef([])
+      // A fresh box takes the next number in this batch: after the highest one
+      // already drawn or inserted. Once the batch is sent nothing is left, so
+      // the next batch starts at 1 again.
+      const nextNumber = () => sentRef.current
+        .concat(boxesRef.current)
+        .reduce((max, item) => Math.max(max, Number(item.n) || 0), 0) + 1
       // A region an element pick handed over, applied once the freeze lands
       // (the page must not move between the pick and the capture).
       const pickRef = useRef(null)
@@ -1526,10 +1449,6 @@ window.__ModuleLoader__.load({
       const thumbsRef = useRef({})
       // The latest openMarkup, callable from the webview's message listener.
       const openRef = useRef(null)
-      // The overlay outlives a conversation switch: each session keeps its own
-      // ledger here, and `ownerRef` says whose rows are in `sent` right now.
-      const ledgersRef = useRef(new Map())
-      const ownerRef = useRef(null)
       // Retry handlers re-run the latest insert, never the render that failed.
       const insertRef = useRef(null)
       const insertAllRef = useRef(null)
@@ -1763,9 +1682,6 @@ window.__ModuleLoader__.load({
         if (shotRef.current || openingRef.current) return
         openingRef.current = true
         setMark(null)
-        // Numbers never restart mid-conversation: a new region takes the next
-        // number after everything already pushed to the composer.
-        seqRef.current = sentRef.current.reduce((max, entry) => Math.max(max, Number(entry.n) || 0), 0)
         const found = findTarget()
         if (!found) {
           // Nothing to mark: the click has to be forgotten, or the guard above
@@ -1776,10 +1692,6 @@ window.__ModuleLoader__.load({
         }
         setError('')
         setBusy(true)
-        // A new markup session is a new round: beads pushed in the last round
-        // step off the canvas, while the ledger keeps them for a second look.
-        roundRef.current += 1
-        setRound(roundRef.current)
         try {
           const width = Math.max(1, Math.round(found.rect.width))
           const height = Math.max(1, Math.round(found.rect.height))
@@ -1815,8 +1727,7 @@ window.__ModuleLoader__.load({
             const pick = pickRef.current
             pickRef.current = null
             if (pick) {
-              seqRef.current += 1
-              const number = seqRef.current
+              const number = nextNumber()
               const id = `b${Date.now().toString(36)}${Math.floor(Math.random() * 1000)}`
               const bx = Math.max(0, Math.min(width - MIN_SIDE, Number(pick.x) || 0))
               const by = Math.max(0, Math.min(height - MIN_SIDE, Number(pick.y) || 0))
@@ -1962,11 +1873,11 @@ window.__ModuleLoader__.load({
         return () => clearInterval(timer)
       }, [sent])
 
-      // A bead leaves the draft when its line does — sent by hand, or deleted.
-      // It does not leave the page: a sent note stays as a ghost, because the
-      // second pass over a document is usually about what was said the first.
+      // A bead leaves the page when its line leaves the draft — sent, or
+      // deleted by hand. Nothing is kept around afterwards: each new box starts
+      // a fresh little batch.
       useEffect(() => {
-        if (!sent.some((entry) => !entry.ghost)) return undefined
+        if (!sent.length) return undefined
         const timer = setInterval(() => {
           const services = composerFor(props && props.ctx ? props.ctx : {}, sessionId)
           if (!services || !services.input) return
@@ -1978,7 +1889,7 @@ window.__ModuleLoader__.load({
           const draft = readDraft(services)
           const next = pruneBeads(sent, draft, phase)
           if (!next) return
-          // A line deleted by hand takes its record away; the thumbnail object
+          // A line deleted by hand takes its bubble away; the thumbnail object
           // URL has to go with it, or the blob outlives the note.
           const kept = new Set(next.map((entry) => entry.order))
           for (const entry of sent) {
@@ -1988,11 +1899,7 @@ window.__ModuleLoader__.load({
             try { URL.revokeObjectURL(url) } catch { /* already gone */ }
             delete thumbsRef.current[entry.order]
           }
-          // The composer released a sent message's attachments, so keeping the
-          // old ids would let the ledger claim a picture that no longer exists.
-          const already = new Set(sent.filter((entry) => entry.ghost).map((entry) => entry.order))
-          const ghosted = next.some((entry) => entry.ghost && !already.has(entry.order))
-          setSent(ghosted ? next.map((entry) => (entry.ghost ? { ...entry, ids: [] } : entry)) : next)
+          setSent(next)
         }, 900)
         return () => clearInterval(timer)
       }, [sent, sessionId])
@@ -2034,10 +1941,8 @@ window.__ModuleLoader__.load({
         const target = targetRef.current
         if (!source || !target) return
         const id = `b${Date.now().toString(36)}${Math.floor(Math.random() * 1000)}`
-        // `order` only keeps the drawing order; the number is frozen for the
-        // whole conversation, so deleting a bead never renumbers the others.
-        seqRef.current += 1
-        const number = seqRef.current
+        // The batch is numbered 1..n; a new batch starts at 1 again.
+        const number = nextNumber()
         const order = number
         setEditing(null)
 
@@ -2147,9 +2052,6 @@ window.__ModuleLoader__.load({
         setErrorAction(null)
       }
 
-      /** Entries still waiting in the draft (ghosts were already sent). */
-      const liveEntries = (list) => list.filter((entry) => !entry.ghost)
-
       /**
        * The pane a committed region belongs to, when it is on screen: `null`
        * means another file or tab is shown there now, `undefined` means the
@@ -2236,14 +2138,8 @@ window.__ModuleLoader__.load({
             note: box.note,
             line: text,
             box,
-            // The conversation this note was written in: the ledger is parked
-            // per session, and a stale render must never write it elsewhere.
-            session: sessionId,
-            // The markup round it belongs to. A record keeps its bead only in
-            // the round that pushed it; the next round leaves it to the ledger.
-            round: roundRef.current,
             // Kept on the entry: the bead can be reopened long after the shot
-            // is gone, and a re-check needs to know which file and quote it meant.
+            // is gone, and a retry needs to know which file it came from.
             source: shape,
             live: shot.mode === 'live',
             paneKind: source.kind,
@@ -2252,8 +2148,6 @@ window.__ModuleLoader__.load({
             // Draft attachment ids: removing a live bead has to drop its picture
             // too, otherwise the crop stays attached to the prompt.
             ids: Array.isArray(result.ids) ? result.ids : [],
-            ghost: false,
-            stale: false,
             missed,
             thumb: '',
           }
@@ -2300,7 +2194,7 @@ window.__ModuleLoader__.load({
       const maybeHeader = (entries, shape) => {
         const path = shape.path || ''
         const group = entries
-          .filter((entry) => !entry.ghost && entry.source && entry.source.path === path)
+          .filter((entry) => entry.source && entry.source.path === path)
           .sort((left, right) => left.order - right.order)
         if (group.length < 3) return
         const services = composer()
@@ -2320,7 +2214,7 @@ window.__ModuleLoader__.load({
        * line as an extra attachment.
        */
       const retryCrop = async (entry) => {
-        if (!sessionId || !entry || entry.ghost) return
+        if (!sessionId || !entry) return
         const target = findTarget()
         if (!target || target.kind !== 'document') {
           fail(t('sbNoPage'), { label: t('dismiss'), run: clearError })
@@ -2423,16 +2317,12 @@ window.__ModuleLoader__.load({
               note: item.box.note,
               line: item.line,
               box: item.box,
-              session: sessionId,
-              round: roundRef.current,
               source: shape,
               live: shot.mode === 'live',
               paneKind: source.kind,
               left: pane ? pane.left : 0,
               top: pane ? pane.top : 0,
               ids: id ? [id] : [],
-              ghost: false,
-              stale: false,
               missed: !item.blob,
               thumb: item.blob ? thumbUrl(item.box.order, item.blob) : '',
             })
@@ -2451,208 +2341,21 @@ window.__ModuleLoader__.load({
       }
       insertAllRef.current = insertAll
 
-      /**
-       * Put a sent note back into the draft. No crop is taken again: the line is
-       * already built, and it still points at the file it was made on.
-       */
-      const reinsert = async (entry) => {
-        if (!entry || !sessionId || writingRef.current) return
-        writingRef.current = true
-        setBusy(true)
-        clearError()
-        try {
-          const result = await commit({ sessionId, files: [], text: entry.line })
-          if (!result || result.ok !== true) {
-            const busyBox = Boolean(result && result.code === 'busy')
-            fail(busyBox ? t('errBusy') : t('errUnavailable'), busyBox
-              ? { label: t('retry'), run: () => { void reinsert(entry) } }
-              : { label: t('dismiss'), run: clearError })
-            return
-          }
-          setSent((previous) => previous.map((item) => (item.order === entry.order
-            ? { ...item, ghost: false, stale: false, missed: false, ids: [], thumb: '' }
-            : item)))
-        } catch (cause) {
-          fail(t('errCrop', { msg: (cause && cause.message) || 'unknown' }), { label: t('dismiss'), run: clearError })
-        } finally {
-          writingRef.current = false
-          setBusy(false)
-        }
-      }
-
-      /** Bring the preview back to where a note was made. */
-      const jumpTo = (entry) => {
-        const target = findTarget()
-        if (!target) {
-          fail(t('jumpFailed'), { label: t('dismiss'), run: clearError })
-          return
-        }
-        const anchorData = entry.box && entry.box.anchor ? entry.box.anchor : {}
-        if (anchorData.page) {
-          const page = query(target.root, `[data-pdf-page="${anchorData.page}"]`)
-          if (page && typeof page.scrollIntoView === 'function') page.scrollIntoView({ block: 'center' })
-          return
-        }
-        if (target.scroll && entry.box) {
-          target.scroll.scrollTop = Math.max(0, Number(entry.box.y) - 80)
-        }
-      }
-
-      /**
-       * Text the preview shows for an entry's anchor right now, or ''. The
-       * optional cache is shared by one sweep, so twenty notes on one file do
-       * not walk the whole line list twenty times.
-       */
-      const liveQuote = (target, entry, cache) => {
-        const anchorData = entry.box && entry.box.anchor ? entry.box.anchor : {}
-        if (!anchorData.quote) return ''
-        if (anchorData.page) {
-          const key = `pdf:${anchorData.page}`
-          if (cache && cache.has(key)) return cache.get(key)
-          const page = query(target.root, `[data-pdf-page="${anchorData.page}"]`)
-          const layer = page ? query(page, '[data-pdf-text]') : null
-          const text = layer ? String(layer.textContent || '') : ''
-          if (cache) cache.set(key, text)
-          return text
-        }
-        if (anchorData.from) {
-          let nodes = cache ? cache.get('lines') : null
-          if (!nodes) {
-            const scope = target.scroll || target.body || target.root
-            nodes = queryAll(scope, '[data-textpreview-line]')
-            if (cache) cache.set('lines', nodes)
-          }
-          return nodes
-            .filter((node) => {
-              const n = Number(node.getAttribute('data-textpreview-line'))
-              return n >= anchorData.from && n <= anchorData.to
-            })
-            .map((node) => node.textContent || '')
-            .join(' ')
-        }
-        return ''
-      }
-
-      /**
-       * A text or PDF anchor can be checked: the quoted words either still are
-       * where the note says, or the file changed under it. Web pages and images
-       * have no stable quote to compare, so they are never flagged. `where` is
-       * the already-resolved path of the pane, for a sweep over many entries.
-       */
-      const isStale = (target, entry, cache, where) => {
-        const anchorData = entry.box && entry.box.anchor ? entry.box.anchor : {}
-        if (target.kind !== 'document' || !anchorData.quote) return false
-        const path = where === undefined ? documentPath(target.root) : where
-        if (entry.source && entry.source.path && path !== entry.source.path) return false
-        const live = liveQuote(target, entry, cache)
-        if (!live) return false
-        const want = flatLine(anchorData.quote).replace(/…$/, '')
-        if (!want) return false
-        return !flatLine(live).includes(want)
-      }
-
-      const verifyOne = (entry) => {
-        const target = findTarget()
-        if (!target) return
-        const stale = isStale(target, entry)
-        if (stale === Boolean(entry.stale)) return
-        setSent((previous) => previous.map((item) => (item.order === entry.order ? { ...item, stale } : item)))
-      }
-
-      // The file can change while the notes sit in the draft: re-check their
-      // quotes now and then, so a stale note says so before it is sent.
+      // Notes belong to the conversation that wrote them: the overlay outlives a
+      // switch, so a new conversation starts with an empty page, no bubbles and
+      // numbering from 1 again.
+      const lastSessionRef = useRef(null)
       useEffect(() => {
-        if (!sent.some((entry) => entry.box && entry.box.anchor && entry.box.anchor.quote)) return undefined
-        const timer = setInterval(() => {
-          const target = findTarget()
-          if (!target || target.kind !== 'document') return
-          const where = documentPath(target.root)
-          const cache = new Map()
-          setSent((previous) => {
-            let changed = false
-            const next = previous.map((entry) => {
-              const stale = isStale(target, entry, cache, where)
-              if (Boolean(entry.stale) === stale) return entry
-              changed = true
-              return { ...entry, stale }
-            })
-            return changed ? next : previous
-          })
-        }, 5000)
-        return () => clearInterval(timer)
-      }, [sent])
-
-      // Notes belong to the conversation that wrote them: the overlay itself
-      // stays mounted across a switch, so the ledger is parked per session
-      // instead of letting one chat's rows leak into the next chat's draft.
-      useEffect(() => {
-        const previous = ownerRef.current
-        if (previous === sessionId) return
-        ownerRef.current = sessionId
-        if (previous) ledgersRef.current.set(previous, { rows: sentRef.current, persist })
+        if (lastSessionRef.current === sessionId) return
+        lastSessionRef.current = sessionId
         if (shotRef.current && cancelRef.current) cancelRef.current()
-        let saved = sessionId ? ledgersRef.current.get(sessionId) : null
-        if (!saved) {
-          let rows = []
-          const raw = sessionId ? store.get(`${LEDGER_KEY}:${sessionId}`) : ''
-          if (raw) {
-            try {
-              const parsed = JSON.parse(raw)
-              if (Array.isArray(parsed)) {
-                rows = parsed.map((row) => ({
-                  ...row,
-                  session: sessionId,
-                  ghost: true,
-                  // A saved record is not part of any round in progress: the
-                  // canvas stays clean and the ledger offers it back.
-                  round: -1,
-                  ids: [],
-                  thumb: '',
-                  stale: false,
-                  live: false,
-                  left: Number(row.left) || 0,
-                  top: Number(row.top) || 0,
-                }))
-              }
-            } catch { /* a corrupted ledger must not break the tool */ }
-          }
-          saved = { rows, persist: rows.length > 0 }
-          if (sessionId) ledgersRef.current.set(sessionId, saved)
-        }
-        setSent(saved.rows.map((row) => (row.ghost ? { ...row, round: -1 } : row)))
-        setPersist(saved.persist)
+        sentRef.current = []
+        boxesRef.current = []
+        setSent([])
+        setBoxes([])
         setEditing(null)
         setHover(null)
       }, [sessionId])
-
-      useEffect(() => {
-        if (!sessionId || !persist) return
-        // A switch renders once with the old list still in `sent`: writing that
-        // would copy one conversation's notes into another's ledger.
-        if (sent.some((entry) => entry.session && entry.session !== sessionId)) return
-        try {
-          const rows = sent.filter((entry) => !entry.session || entry.session === sessionId)
-            .map(({ thumb, ids, ...rest }) => rest)
-          store.set(`${LEDGER_KEY}:${sessionId}`, JSON.stringify(rows))
-        } catch { /* quota */ }
-      }, [persist, sent, sessionId])
-
-      const togglePersist = () => {
-        const park = sessionId ? ledgersRef.current.get(sessionId) : null
-        if (persist) {
-          setPersist(false)
-          if (park) park.persist = false
-          if (sessionId) store.del(`${LEDGER_KEY}:${sessionId}`)
-          return
-        }
-        setPersist(true)
-        if (park) park.persist = true
-        if (!sessionId) return
-        try {
-          const rows = sent.filter((entry) => !entry.session || entry.session === sessionId)
-          store.set(`${LEDGER_KEY}:${sessionId}`, JSON.stringify(rows.map(({ thumb, ids, ...rest }) => rest)))
-        } catch { /* quota */ }
-      }
 
       /**
        * Send the pending text selection: no crop, so the note is one line and
@@ -2737,13 +2440,9 @@ window.__ModuleLoader__.load({
       const selectedBox = selected ? boxes.find((box) => box.id === selected) ?? null : null
       const editingEntry = editing === null ? null : sent.find((item) => item.order === editing) ?? null
 
-      // Beads stay on the page (also after the overlay closes) until the whole
-      // draft goes out, so a note can always be found and edited again.
-      // Only the current round's records keep a bead on the canvas; a record
-      // from an earlier round lives in the ledger, one click away.
-      const beads = sent
-        .filter((entry) => !entry.ghost || entry.round === round)
-        .map((entry) => {
+      // Beads stay on the page until the whole draft goes out, so a note can
+      // always be found and edited again.
+      const beads = sent.map((entry) => {
         const point = bubblePoint(entry)
         if (!point) return null
         return el('button', {
@@ -2751,8 +2450,6 @@ window.__ModuleLoader__.load({
           type: 'button',
           className: 'dwa-bubble',
           'data-editing': editing === entry.order ? '1' : '0',
-          'data-ghost': entry.ghost ? '1' : '0',
-          'data-stale': entry.stale ? '1' : '0',
           title: entry.note || t('bubbleHint'),
           style: { left: `${Math.round(point.x)}px`, top: `${Math.round(point.y)}px` },
           onPointerDown: (event) => event.stopPropagation(),
@@ -2763,7 +2460,6 @@ window.__ModuleLoader__.load({
             event.stopPropagation()
             setEditing(entry.order)
             setSelected(null)
-            if (!entry.ghost) verifyOne(entry)
           },
         }, String(entry.n))
       }).filter(Boolean)
@@ -2772,7 +2468,7 @@ window.__ModuleLoader__.load({
       // deleting a region is easier when its crop can be seen first.
       const hoverEntry = hover === null
         ? null
-        : sent.find((entry) => entry.order === hover && (!entry.ghost || entry.round === round)) || null
+        : sent.find((entry) => entry.order === hover) || null
       const hoverAt = hoverEntry ? bubblePoint(hoverEntry) : null
       const hoverThumb = hoverEntry && hoverEntry.thumb && hoverAt
         ? el('img', {
@@ -2793,12 +2489,9 @@ window.__ModuleLoader__.load({
         top: Math.min(Math.max(10, Math.round(top)), Math.max(10, viewH - 220)),
       })
 
-      /** The card that writes a note: a fresh region, or one already sent. */
+      /** The card that writes a note: a fresh region, or one already inserted. */
       const noteEditor = () => {
         if (editingEntry) {
-          // A ghost has no line in the draft any more: it can be re-inserted or
-          // copied, but there is nothing here to rewrite by typing.
-          if (editingEntry.ghost) return null
           return el('textarea', {
             key: `edit-${editingEntry.order}`,
             value: editingEntry.note,
@@ -2835,10 +2528,7 @@ window.__ModuleLoader__.load({
         })
       }
 
-      /**
-       * Drop a bead. A live bead also drops its line and picture from the
-       * composer; a ghost has neither, it only leaves the ledger.
-       */
+      /** Drop a bead, its line and its picture from the composer. */
       const deleteBead = (order) => {
         const entry = sent.find((item) => item.order === order)
         if (!entry) return
@@ -2848,32 +2538,29 @@ window.__ModuleLoader__.load({
           try { URL.revokeObjectURL(thumb) } catch { /* already gone */ }
           delete thumbsRef.current[order]
         }
-        if (!entry.ghost) {
-          const services = composer()
-          if (services && services.input) {
-            const draft = readDraft(services)
-            const kept = draft.split('\n').filter((line) => line.trim() !== entry.line.trim())
-            if (kept.length !== draft.split('\n').length) {
-              try { services.input.setDraft(kept.join('\n')) } catch { /* busy */ }
-            }
+        const services = composer()
+        if (services && services.input) {
+          const draft = readDraft(services)
+          const kept = draft.split('\n').filter((line) => line.trim() !== entry.line.trim())
+          if (kept.length !== draft.split('\n').length) {
+            try { services.input.setDraft(kept.join('\n')) } catch { /* busy */ }
           }
-          // The line is gone, so its picture has to go too — otherwise the crop
-          // stays in the composer and gets sent with nothing pointing at it.
-          if (services && Array.isArray(entry.ids)) {
-            for (const id of entry.ids) {
-              try { services.input.removeAttachment(id) } catch { /* already gone */ }
-              try { services.conversation.releaseDraftAttachment(id) } catch { /* already gone */ }
-            }
+        }
+        // The line is gone, so its picture has to go too — otherwise the crop
+        // stays in the composer and gets sent with nothing pointing at it.
+        if (services && Array.isArray(entry.ids)) {
+          for (const id of entry.ids) {
+            try { services.input.removeAttachment(id) } catch { /* already gone */ }
+            try { services.conversation.releaseDraftAttachment(id) } catch { /* already gone */ }
           }
         }
         setEditing(null)
       }
 
       const closeCard = () => {
-        // Closing the card of a live region means "I don't want this one": the
-        // bead goes away together with the line it put in the composer. A ghost
-        // already went out, so closing is just closing.
-        if (editing !== null && editingEntry && !editingEntry.ghost) {
+        // Closing the card of a region means "I don't want this one": the bead
+        // goes away together with the line it put in the composer.
+        if (editing !== null && editingEntry) {
           deleteBead(editing)
           return
         }
@@ -2882,15 +2569,6 @@ window.__ModuleLoader__.load({
           return
         }
         cancel()
-      }
-
-      /** Copy one line; a refused clipboard must not look like success. */
-      const copyLine = (line) => {
-        let done = null
-        try { done = copyText(line) } catch (cause) { done = Promise.reject(cause) }
-        if (done && typeof done.then === 'function') {
-          done.then(() => { clearError() }, () => { fail(t('copyFailed')) })
-        }
       }
 
       /** An error and, when the failure has an obvious cure, the cure. */
@@ -2910,126 +2588,6 @@ window.__ModuleLoader__.load({
               }, errorAction.label))
             : null)
         : null)
-
-      /**
-       * A note that already went out: the draft line is gone, but the record and
-       * its picture stay reachable, and one click puts the line back.
-       */
-      const ghostCard = () => (editingEntry && editingEntry.ghost
-        ? el(React.Fragment, null,
-          el('div', { className: 'dwa-quote' }, editingEntry.note || t('promptNoNote')),
-          el('div', { className: 'dwa-ledger-meta' }, editingEntry.line),
-          el('div', { className: 'dwa-actions' },
-            el('button', {
-              type: 'button',
-              className: 'dwa-btn',
-              'data-primary': '1',
-              onClick: () => { void reinsert(editingEntry) },
-            }, t('ledgerReinsert')),
-            el('button', {
-              type: 'button',
-              className: 'dwa-btn',
-              onClick: () => copyLine(editingEntry.line),
-            }, t('ledgerCopy')),
-            el('button', {
-              type: 'button',
-              className: 'dwa-btn',
-              onClick: () => deleteBead(editingEntry.order),
-            }, t('ledgerRemove'))))
-        : null)
-
-      /** The quote a live note was drawn on no longer matches the file. */
-      const staleBlock = () => (editingEntry && editingEntry.stale
-        ? el('div', { className: 'dwa-stale' },
-          el('div', null, el('b', null, `${t('staleBadge')} `), t('staleNotice')),
-          el('div', { className: 'dwa-ledger-meta' },
-            el('b', null, `${t('staleOriginal')}: `),
-            (editingEntry.box && editingEntry.box.anchor && editingEntry.box.anchor.quote) || editingEntry.line),
-          (() => {
-            // What the file says at that spot now, when it still can be read.
-            const target = findTarget()
-            const now = target ? liveQuote(target, editingEntry) : ''
-            return now
-              ? el('div', { className: 'dwa-ledger-meta' },
-                el('b', null, `${t('staleCurrent')}: `),
-                shrink(now, 180))
-              : null
-          })(),
-          el('div', { className: 'dwa-actions' },
-            el('button', {
-              type: 'button',
-              className: 'dwa-btn',
-              onClick: () => verifyOne(editingEntry),
-            }, t('staleReverify'))))
-        : null)
-
-      /** One row per note pushed in this conversation, latest order last. */
-      const ledgerPanel = () => {
-        if (!panel) return null
-        const list = sent.slice().sort((left, right) => left.order - right.order)
-        const width = Math.min(340, Math.max(260, 300))
-        const at = anchor
-          ? spotOf(anchor.left + anchor.width - width - 8, anchor.top + 44, width)
-          : spotOf(viewW - width - 16, 64, width)
-        return el('div', { className: 'dwa-ledger', style: { left: `${at.left}px`, top: `${at.top}px`, width: `${width}px` } },
-          el('div', { className: 'dwa-ledger-head' },
-            el('b', null, t('ledgerTitle', { count: String(list.length) })),
-            el('span', { style: { flex: '1' } }),
-            el('button', {
-              type: 'button',
-              className: 'dwa-btn',
-              title: t('ledgerPersist'),
-              'data-on': persist ? '1' : '0',
-              onClick: togglePersist,
-            }, t('ledgerPersist')),
-            el('button', { type: 'button', className: 'dwa-x', title: t('close'), onClick: () => setPanel(false) }, '✕')),
-          list.length
-            ? list.map((entry) => el('div', { className: 'dwa-ledger-row', key: `ledger-${entry.order}` },
-              el('span', { className: 'dwa-ledger-n' }, String(entry.n)),
-              el('div', { className: 'dwa-ledger-text' },
-                el('div', { className: 'dwa-ledger-note' }, entry.note || t('promptNoNote')),
-                el('div', { className: 'dwa-ledger-meta' },
-                  `${entry.ghost ? t('ledgerSent') : t('ledgerDraft')} · ${(entry.source && entry.source.path) || t('thisFile')}${entry.stale ? ` · ${t('staleBadge')}` : ''}`)),
-              el('button', {
-                type: 'button',
-                className: 'dwa-btn',
-                title: t('ledgerCopy'),
-                onClick: () => copyLine(entry.line),
-              }, '⧉'),
-              entry.ghost
-                ? el('button', {
-                  type: 'button',
-                  className: 'dwa-btn',
-                  title: t('ledgerReinsert'),
-                  onClick: () => { void reinsert(entry) },
-                }, t('ledgerReinsert'))
-                : null,
-              el('button', {
-                type: 'button',
-                className: 'dwa-btn',
-                title: t('checkAnchor'),
-                onClick: () => jumpTo(entry),
-              }, '↗'),
-              el('button', {
-                type: 'button',
-                className: 'dwa-x',
-                title: t('ledgerRemove'),
-                onClick: () => deleteBead(entry.order),
-              }, '✕')))
-            : el('div', { className: 'dwa-ledger-meta' }, t('ledgerEmpty')))
-      }
-
-      const ledgerButton = sent.length
-        ? el('button', {
-          key: 'ledger-tool',
-          type: 'button',
-          className: 'dwa-tool',
-          title: t('ledgerTitle', { count: String(sent.length) }),
-          'aria-label': t('ledgerTitle', { count: String(sent.length) }),
-          onPointerDown: (event) => event.stopPropagation(),
-          onClick: (event) => { event.preventDefault(); event.stopPropagation(); setPanel((open) => !open) },
-        }, el('span', { className: 'dwa-tool-count' }, String(sent.length)))
-        : null
 
       if (!shot) {
         const trigger = anchor
@@ -3087,11 +2645,11 @@ window.__ModuleLoader__.load({
           }),
           mark.error ? el('div', { className: 'dwa-error' }, mark.error) : null)
           : null
-        const body = card || ghostCard()
+        const body = card
         return el(React.Fragment, null,
           el('style', null, CSS),
           trigger && slotHost
-            ? createPortal(el('span', { className: 'dwa-slot' }, trigger, ledgerButton), slotHost)
+            ? createPortal(el('span', { className: 'dwa-slot' }, trigger), slotHost)
             : null,
           trigger && !slotHost
             ? el('div', {
@@ -3101,13 +2659,6 @@ window.__ModuleLoader__.load({
                 top: `${Math.round(anchor.top) + 6}px`,
               },
             }, trigger)
-            : null,
-          // No pane means no slot to sit in; the ledger still has to be reachable.
-          !trigger && ledgerButton
-            ? el('div', {
-              className: 'dwa-float',
-              style: { left: `${Math.max(8, viewW - 44)}px`, top: '10px' },
-            }, ledgerButton)
             : null,
           beads,
           hoverThumb,
@@ -3130,7 +2681,6 @@ window.__ModuleLoader__.load({
             el('div', { className: 'dwa-sheet-bar' },
               el('button', { type: 'button', className: 'dwa-x', title: editingEntry ? t('bubbleRemove') : t('close'), onClick: closeCard }, '✕')),
             body,
-            staleBlock(),
             errorBlock())
             : null,
           error && anchor && !body
@@ -3141,8 +2691,7 @@ window.__ModuleLoader__.load({
                 top: `${Math.round(anchor.top) + 46}px`,
               },
             }, errorBlock())
-            : null,
-          ledgerPanel())
+            : null)
       }
 
       const live = shot.mode === 'live'
@@ -3181,7 +2730,7 @@ window.__ModuleLoader__.load({
 
       // The note editor only appears once a region exists, and it never sits on
       // top of the picture while a new region is being dragged out.
-      // The note editor only appears once a region exists (or a sent bead is
+      // The note editor only appears once a region exists (or a live bead is
       // reopened), and it never sits on top of the picture while a new region is
       // being dragged out.
       const sheetParts = (!editingEntry && !selectedBox) || dragging
@@ -3198,8 +2747,7 @@ window.__ModuleLoader__.load({
               }, t('insertAll', { count: String(boxes.length) }))
               : null,
             el('button', { type: 'button', className: 'dwa-x', title: editingEntry ? t('bubbleRemove') : t('close'), onClick: closeCard }, '✕')),
-          editingEntry && editingEntry.ghost ? ghostCard() : noteEditor(),
-          staleBlock(),
+          noteEditor(),
           error ? errorBlock() : null,
         ]
 
@@ -3287,7 +2835,7 @@ window.__ModuleLoader__.load({
         }, t('hint'))
         : null
 
-      return createPortal(el(React.Fragment, null, el('style', null, CSS), surface, beads, hoverThumb, hintStrip, sheet, ledgerPanel()), document.body)
+      return createPortal(el(React.Fragment, null, el('style', null, CSS), surface, beads, hoverThumb, hintStrip, sheet), document.body)
     }
 
     return {
