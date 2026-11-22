@@ -1446,6 +1446,58 @@ async function scenarioSheet() {
   })
 }
 
+// ========================================================= scenario H: hotkey
+async function scenarioHotkey() {
+  const runtime = createRuntime()
+  const plugin = loadModule(runtime)
+  const { ctx, useSessions } = makeComposer()
+  const canvasLog = []
+
+  // While the page has the keyboard, the shell window never sees a keydown:
+  // the injected agent has to report the shortcut instead.
+  const webview = new FakeNode('webview', { 'data-sidebar-browser-frame': 'webview' }, rect(260, 100, 1020, 760))
+  webview.captured = 0
+  webview.scripts = []
+  webview.capturePage = function capture() {
+    this.captured += 1
+    return Promise.resolve({ toDataURL: () => 'data:image/png;base64,AAAA', getSize: () => ({ width: 840, height: 600 }) })
+  }
+  webview.getURL = () => 'http://127.0.0.1:8799/third'
+  webview.executeJavaScript = function run(code) {
+    this.scripts.push(String(code))
+    return Promise.resolve({ selector: '', heading: '', quote: '' })
+  }
+  const pane = new FakeNode('div', {}, rect(260, 60, 1020, 800), [webview])
+  globalThis.document = fakeDocument([pane], canvasLog)
+  globalThis.Image = FakeImage
+
+  const scene = await mountScenario({ runtime, plugin, ctx, useSessions, stage: rect(260, 100, 1020, 760) })
+
+  check('hotkey: the injected page agent reports Alt+A to the shell', () => {
+    const injected = webview.scripts.join('\n')
+    assert.ok(injected.includes('send("hotkey"'), 'the page never reports the shortcut')
+    assert.ok(injected.includes('altKey'), 'the page does not look at the modifier')
+  })
+
+  webview.fire('console-message', { message: '__DWA__{"type":"hotkey","data":{}}' })
+  await settle(runtime, scene.mount)
+  scene.tree = scene.mount()
+
+  check('hotkey: Alt+A pressed inside the page starts marking', () => {
+    assert.equal(webview.captured, 1, 'the page was never captured')
+    assert.ok(find(scene.tree, (node) => node.props?.className === 'dwa-freeze'), 'the overlay did not open')
+  })
+
+  webview.fire('console-message', { message: '__DWA__{"type":"hotkey","data":{}}' })
+  await runtime.flush()
+  scene.tree = scene.mount()
+
+  check('hotkey: the same key closes it again', () => {
+    assert.equal(find(scene.tree, (node) => node.props?.className === 'dwa-freeze'), null, 'the overlay stayed open')
+    assert.equal(webview.style.visibility, '', 'the page stayed hidden')
+  })
+}
+
 await scenarioPage()
 await scenarioText()
 await scenarioPdf()
@@ -1453,6 +1505,7 @@ await scenarioImage()
 await scenarioSelection()
 await scenarioSessionSwitch()
 await scenarioSheet()
+await scenarioHotkey()
 
 console.log(`ok — ${checks.length} checks`)
 for (const label of checks) console.log('  ✓', label)

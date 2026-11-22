@@ -748,6 +748,14 @@ window.__ModuleLoader__.load({
       '    event.preventDefault(); event.stopPropagation();',
       '    send("selection", { text: chosen.slice(0, 4000), quote: chosen.slice(0, 400), x: box.left, y: box.top });',
       '  }, true);',
+      '  document.addEventListener("keydown", function (event) {',
+      '    if (!event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;',
+      '    if (String(event.key || "").toLowerCase() !== "a") return;',
+      '    var node = event.target;',
+      '    if (node && (node.isContentEditable || (node.closest && node.closest("input, textarea")))) return;',
+      '    event.preventDefault(); event.stopPropagation();',
+      '    send("hotkey", {});',
+      '  }, true);',
       '  window.__dwa = { arm: function (on) { picking = !!on; if (!picking) ring(null) } };',
       '})()',
     ].join('\n')
@@ -1618,6 +1626,13 @@ window.__ModuleLoader__.load({
           try { message = JSON.parse(raw.slice(WEB_TAG.length)) } catch { return }
           const data = message && message.data
           if (!data) return
+          // Alt+A pressed while the page has the keyboard: the shell never sees
+          // it, so the page reports it instead of handling the shortcut itself.
+          if (message.type === 'hotkey') {
+            if (shotRef.current) cancelRef.current()
+            else if (openRef.current) void openRef.current()
+            return
+          }
           const found = findTarget()
           if (message.type === 'pick') {
             setPicking(false)
